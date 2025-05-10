@@ -1,0 +1,254 @@
+openapi: 3.0.0
+info:
+  title: Simple Todo List API
+  version: v1.0.0
+  description: A basic API for managing a list of todo items.
+  contact:
+    name: API Support
+    email: support@example.com
+    url: https://example.com/support
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Development server
+  - url: https://api.example.com/v1
+    description: Production server
+
+components:
+  schemas:
+    TodoItem:
+      type: object
+      required:
+        - title
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+          description: Unique identifier for the todo item.
+        title:
+          type: string
+          description: The main content of the todo item.
+          example: "Buy groceries"
+        isCompleted:
+          type: boolean
+          default: false
+          description: Whether the todo item is completed or not.
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Timestamp of when the item was created.
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Timestamp of when the item was last updated.
+    NewTodo:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          description: The main content of the new todo item.
+          example: "Schedule doctor appointment"
+        isCompleted:
+          type: boolean
+          default: false
+          description: Whether the todo item is completed or not.
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+          format: int32
+        message:
+          type: string
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-KEY
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /todos:
+    get:
+      summary: List all todo items
+      operationId: listTodos
+      tags:
+        - Todos
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of items to return
+          required: false
+          schema:
+            type: integer
+            format: int32
+            default: 20
+        - name: completed
+          in: query
+          description: Filter by completion status
+          required: false
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: A list of todo items.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TodoItem'
+        default:
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: Create a new todo item
+      operationId: createTodo
+      tags:
+        - Todos
+      requestBody:
+        description: The todo item to create.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewTodo'
+      responses:
+        '201':
+          description: Todo item created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodoItem'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /todos/{todoId}:
+    get:
+      summary: Get a specific todo item by ID
+      operationId: getTodoById
+      tags:
+        - Todos
+      parameters:
+        - name: todoId
+          in: path
+          required: true
+          description: ID of the todo item to retrieve
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: The requested todo item.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodoItem'
+        '404':
+          description: Todo item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      summary: Update an existing todo item
+      operationId: updateTodo
+      tags:
+        - Todos
+      parameters:
+        - name: todoId
+          in: path
+          required: true
+          description: ID of the todo item to update
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        description: The updated todo item information.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewTodo' # Can reuse NewTodo or create an UpdateTodo schema
+      responses:
+        '200':
+          description: Todo item updated successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodoItem'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Todo item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      summary: Delete a todo item
+      operationId: deleteTodo
+      tags:
+        - Todos
+      parameters:
+        - name: todoId
+          in: path
+          required: true
+          description: ID of the todo item to delete
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Todo item deleted successfully.
+        '404':
+          description: Todo item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        default:
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
