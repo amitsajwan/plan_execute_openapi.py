@@ -2708,3 +2708,4 @@ def parse_llm_json_output_with_model(llm_output: str, expected_model: Optional[T
 
 
 --------------------------------------------------------------------------------------------------------------------------------
+uvicorn main:app --reload --host 0.0.0.0 --port 8000

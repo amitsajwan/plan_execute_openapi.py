@@ -98,11 +98,11 @@ def initialize_llms() -> Tuple[Any, Any]:
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
             router_llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash-latest", temperature=0, google_api_key=google_api_key,
+                model="gemini-2.0-flash", temperature=0, google_api_key=google_api_key,
                 convert_system_message_to_human=True )
             logger.info("Router LLM (Gemini Flash) initialized.")
             worker_llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-pro-latest", temperature=0.1, google_api_key=google_api_key,
+                model="gemini-2.0-flash", temperature=0.1, google_api_key=google_api_key,
                 convert_system_message_to_human=True )
             logger.info("Worker LLM (Gemini 1.5 Pro) initialized.")
         except ImportError: logger.error("langchain-google-genai not installed.")
