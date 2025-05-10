@@ -2,7 +2,7 @@
 import logging
 from typing import Any, Dict, Literal
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.base import BaseCheckpointSaver # Import base for type hinting
+from langgraph.checkpoint.base import BaseCheckpointSaver 
 
 from models import BotState
 from core_logic import OpenAPICoreLogic
@@ -13,21 +13,27 @@ logger = logging.getLogger(__name__)
 def finalize_response(state: BotState) -> BotState:
     """Sets final_response, clears intermediate response, and prepares for END."""
     tool_name = "responder"
-    state.update_scratchpad_reason(tool_name, "Finalizing response for user.")
-    logger.debug("Executing responder node (finalize_response).")
-
-    if state.response:
-        state.final_response = state.response
-    elif not state.final_response:
-        state.final_response = "Processing complete. How can I help you further?"
-        logger.warning("Responder: No intermediate 'response' or existing 'final_response'. Using default.")
+    # Critical log: What is state.response when finalize_response is entered?
+    logger.info(f"Responder ({tool_name}): Entered. state.response = '{state.response}', state.final_response = '{state.final_response}'")
+    state.update_scratchpad_reason(tool_name, f"Finalizing response. Initial state.response: '{state.response}'")
     
-    state.response = None
-    state.next_step = None 
-    state.update_scratchpad_reason(tool_name, f"Final response set: {state.final_response[:100]}...")
+    if state.response: 
+        state.final_response = state.response
+        logger.info(f"Responder ({tool_name}): Set final_response from state.response: '{state.final_response[:200]}...'")
+    elif not state.final_response: # Only set default if final_response isn't already set by some other means
+        state.final_response = "Processing complete. How can I help you further?"
+        logger.warning(f"Responder ({tool_name}): state.response was empty/None. Using default final_response: '{state.final_response}'")
+    else:
+        # This case means state.response was falsey, but state.final_response already had a value.
+        logger.info(f"Responder ({tool_name}): state.response was falsey, but final_response already set to: '{state.final_response[:200]}...'. No change to final_response.")
+
+    state.response = None # Clear intermediate response for the next turn
+    state.next_step = None # Clear routing directive
+    state.update_scratchpad_reason(tool_name, f"Final response set in state: {state.final_response[:200]}...")
+    logger.info(f"Responder ({tool_name}): Exiting. state.final_response = '{state.final_response}', state.response = '{state.response}'")
     return state
 
-def build_graph(router_llm: Any, worker_llm: Any, checkpointer: BaseCheckpointSaver) -> StateGraph: # Accept checkpointer
+def build_graph(router_llm: Any, worker_llm: Any, checkpointer: BaseCheckpointSaver) -> StateGraph: 
     """Builds and compiles the LangGraph StateGraph for the OpenAPI agent."""
     logger.info("Building LangGraph graph...")
 
@@ -88,13 +94,7 @@ def build_graph(router_llm: Any, worker_llm: Any, checkpointer: BaseCheckpointSa
     internal_node_routes: Dict[str, str] = {
         node_name: node_name for node_name in all_internal_target_nodes
     }
-    # It's good practice to have a default fallback in conditional edges mapping
-    # if the key from state.next_step might not exist in the map.
-    # However, LangGraph's add_conditional_edges expects all possible keys returned by the callable
-    # to be present in the path_map. If a key is returned that's not in path_map, it will error.
-    # So, ensuring all nodes correctly set state.next_step to a valid target is crucial.
-    # The 'default_fallback_responder' isn't used by LangGraph's mechanism directly unless the callable returns it.
-
+    
     nodes_setting_next_step = [
         "parse_openapi_spec", "process_schema_pipeline", "_generate_execution_graph",
         "verify_graph", "refine_api_graph", "describe_graph", "get_graph_json",
@@ -111,7 +111,6 @@ def build_graph(router_llm: Any, worker_llm: Any, checkpointer: BaseCheckpointSa
 
     builder.add_edge("responder", END)
 
-    # Compile the graph WITH the checkpointer here
     app = builder.compile(checkpointer=checkpointer)
     logger.info("LangGraph graph compiled successfully with checkpointer.")
     return app
