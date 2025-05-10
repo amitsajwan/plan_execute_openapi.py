@@ -102,8 +102,8 @@ class OpenAPICoreLogic:
             state.schema_summary = llm_call_helper(self.worker_llm, summary_prompt)
             logger.info("Schema summary generated.")
         except Exception as e:
-            logger.error(f"Error generating schema summary: {e}", exc_info=False) # Reduce log noise for quota errors
-            state.schema_summary = f"Error generating summary: {str(e)[:150]}..." # Truncate long error messages
+            logger.error(f"Error generating schema summary: {e}", exc_info=False) 
+            state.schema_summary = f"Error generating summary: {str(e)[:150]}..." 
         state.update_scratchpad_reason(tool_name, f"Summary status: {'Success' if state.schema_summary and not state.schema_summary.startswith('Error') else 'Failed'}")
 
     def _identify_apis_from_schema(self, state: BotState):
@@ -116,7 +116,7 @@ class OpenAPICoreLogic:
         for path, item in state.openapi_schema.get('paths', {}).items():
             if not isinstance(item, dict): continue
             for method, op in item.items():
-                if method.lower() not in {'get', 'post', 'put', 'delete', 'patch'} or not isinstance(op, dict): continue
+                if method.lower() not in {'get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'trace'} or not isinstance(op, dict): continue # Added options, head, trace
                 op_id_path = path.replace('/', '_').replace('{', '').replace('}', '').strip('_')
                 apis.append({'operationId': op.get('operationId', f"{method.lower()}_{op_id_path or 'root'}"),
                              'path': path, 'method': method.upper(), 'summary': op.get('summary', ''),
@@ -133,17 +133,20 @@ class OpenAPICoreLogic:
             logger.warning("No APIs for payload descriptions."); return
 
         payload_descs = state.payload_descriptions or {}
-        # Reduce LLM calls: Process only first 5 APIs with bodies/params, or specified targets
-        apis_to_consider = [api for api in state.identified_apis if api.get('parameters') or api.get('requestBody')]
-        apis_to_process = [api for api in apis_to_consider if (target_apis is None or api['operationId'] in target_apis)][:5] # Limit to 5 unless specific targets
-        if target_apis: # If specific targets, use them irrespective of the limit of 5
+        
+        # Reduce LLM calls: Process only first 3 APIs with bodies/params for initial run, or specified targets
+        if target_apis:
             apis_to_process = [api for api in state.identified_apis if api['operationId'] in target_apis]
-
+        else: # Initial run, process a small subset
+            apis_with_payload_info = [api for api in state.identified_apis if api.get('parameters') or api.get('requestBody')]
+            apis_to_process = apis_with_payload_info[:3] # LIMITING LLM CALLS HERE
 
         logger.info(f"Attempting to generate payload descriptions for {len(apis_to_process)} APIs.")
         for api in apis_to_process:
             op_id = api['operationId']
-            if op_id in payload_descs and not context_override and not target_apis: continue # Skip if already done unless forced
+            # Skip if already generated and no context_override forcing regeneration, unless it's a specific target
+            if op_id in payload_descs and not context_override and not target_apis: 
+                continue
 
             param_str = json.dumps(api.get('parameters',[]))[:200]; body_str = json.dumps(api.get('requestBody',{}))[:200]
             resp_str = json.dumps(api.get('responses',{}).get('200',{}).get('content',{}).get('application/json',{}).get('schema',{}))[:200]
@@ -153,7 +156,12 @@ class OpenAPICoreLogic:
                 payload_descs[op_id] = llm_call_helper(self.worker_llm, prompt)
             except Exception as e:
                 logger.error(f"Error for payload desc {op_id}: {e}", exc_info=False)
-                payload_descs[op_id] = f"Error: {str(e)[:100]}..."
+                payload_descs[op_id] = f"Error generating description: {str(e)[:100]}..." # Store error
+                # If a quota error occurs, we might want to stop processing more payloads in this run
+                if "quota" in str(e).lower() or "429" in str(e):
+                    logger.warning(f"Quota error during payload description for {op_id}. Stopping further payload generation for this turn.")
+                    state.response = state.response or "" + f" Partial success: Hit API limits while generating payload examples. {op_id} failed."
+                    break # Stop processing more APIs in this batch
         state.payload_descriptions = payload_descs
         state.update_scratchpad_reason(tool_name, f"Payload descs updated for {len(apis_to_process)} APIs.")
 
@@ -165,7 +173,7 @@ class OpenAPICoreLogic:
 
         if not state.identified_apis:
             state.response = "Cannot generate graph: No APIs identified."
-            state.execution_graph = None # Ensure it's None
+            state.execution_graph = None 
             state.update_scratchpad_reason(tool_name, state.response)
             state.next_step = "responder"
             return state
@@ -185,10 +193,9 @@ class OpenAPICoreLogic:
         except Exception as e:
             logger.error(f"Error generating graph: {e}", exc_info=False)
             state.response = f"Error generating graph: {str(e)[:150]}..."
-            state.execution_graph = None # Ensure graph is None on error
+            state.execution_graph = None 
             state.graph_regeneration_reason = f"Error: {str(e)[:100]}..."
-            # More robust: if graph_gen_attempts > X, then handle_unknown
-            state.next_step = "handle_unknown" # Route to handle_unknown on generation error
+            state.next_step = "handle_unknown" 
         state.update_scratchpad_reason(tool_name, f"Graph gen status: {'Success' if state.execution_graph else 'Failed'}. Resp: {state.response}")
         return state
 
@@ -203,27 +210,27 @@ class OpenAPICoreLogic:
         
         state.schema_summary = None; state.identified_apis = []; state.payload_descriptions = {}
         state.execution_graph = None; state.graph_refinement_iterations = 0
-        state.plan_generation_goal = state.plan_generation_goal or "General overview workflow."
+        state.plan_generation_goal = state.plan_generation_goal or "Provide a general overview workflow."
         state.scratchpad['graph_gen_attempts'] = 0
 
         self._generate_llm_schema_summary(state)
-        if state.schema_summary and state.schema_summary.startswith("Error"): # Stop if summary failed due to quota
-            state.response = state.schema_summary
+        if state.schema_summary and state.schema_summary.startswith("Error generating summary: 429"): 
+            state.response = state.schema_summary # Pass quota error to user
             state.next_step = "responder"; return state
 
         self._identify_apis_from_schema(state)
         if not state.identified_apis:
-            state.response = (state.response or "") + " No API operations identified. Cannot generate payloads or graph."
+            state.response = (state.response or "") + " No API operations were identified from the spec. Cannot generate payload descriptions or an execution graph."
             state.next_step = "responder"; return state
 
-        self._generate_payload_descriptions(state) # Processes a subset
-        # Check if payload generation hit a quota error for all its attempts
-        if all(desc.startswith("Error:") for desc in state.payload_descriptions.values() if state.payload_descriptions):
-             state.response = "Failed to generate payload descriptions, likely due to API limits."
-             state.next_step = "responder"; return state
-        
+        self._generate_payload_descriptions(state) 
+        if any(desc.startswith("Error generating description: 429") for desc in state.payload_descriptions.values()):
+             state.response = (state.response or "") + " Partial success: Hit API limits while generating some payload examples."
+             # Continue to graph generation, it might still work or use placeholders
+
         self._generate_execution_graph(state, goal=state.plan_generation_goal)
-        # _generate_execution_graph sets next_step to "verify_graph" or "handle_unknown"/"responder"
+        # If _generate_execution_graph itself fails due to quota, state.response will be set,
+        # and state.next_step will be handle_unknown.
         state.update_scratchpad_reason(tool_name, f"Pipeline initiated. Next: {state.next_step}")
         return state
 
@@ -232,9 +239,9 @@ class OpenAPICoreLogic:
         state.update_scratchpad_reason(tool_name, "Verifying graph.")
         logger.info("Executing verify_graph node.")
 
-        if not state.execution_graph: # Should have been caught by _generate_execution_graph
-            state.response = state.response or "No graph to verify."
-            state.graph_regeneration_reason = "No graph available for verification."
+        if not state.execution_graph: 
+            state.response = state.response or "No execution graph to verify (possibly due to generation error)."
+            state.graph_regeneration_reason = state.graph_regeneration_reason or "No graph was generated to verify."
             state.next_step = "_generate_execution_graph"; return state
 
         is_dag, cycle_msg = check_for_cycles(state.execution_graph)
@@ -246,12 +253,16 @@ class OpenAPICoreLogic:
             else:
                 if state.input_is_spec:
                     api_title = state.openapi_schema.get('info', {}).get('title', 'API') # type: ignore
-                    state.response = f"Processed '{api_title}'. Identified {len(state.identified_apis)} APIs, generated examples, and a workflow graph. Ask questions or request refinements."
+                    state.response = (
+                        f"Successfully processed '{api_title}'. Identified {len(state.identified_apis)} APIs, "
+                        f"generated payload examples, and created an API workflow graph with {len(state.execution_graph.nodes)} steps. "
+                        "You can now ask questions or request specific plan refinements."
+                    )
                     state.input_is_spec = False
                 else: state.response = "Graph verified. " + (state.execution_graph.refinement_summary or "")
-                state.next_step = "describe_graph" # Changed from responder to show the graph
+                state.next_step = "describe_graph" 
         else:
-            state.response = f"Graph verification failed: {cycle_msg}."
+            state.response = f"Graph verification failed: {cycle_msg}. "
             state.graph_regeneration_reason = f"Verification failed: {cycle_msg}."
             if state.graph_refinement_iterations < state.max_refinement_iterations:
                 state.next_step = "refine_api_graph"
@@ -266,7 +277,7 @@ class OpenAPICoreLogic:
         logger.info(f"Executing refine_api_graph. Iteration: {iteration}")
 
         if not state.execution_graph:
-            state.response = "No graph to refine."
+            state.response = "No graph to refine. Please generate a graph first."
             state.next_step = "_generate_execution_graph"; return state
         if iteration > state.max_refinement_iterations:
             state.response = f"Max refinements reached. Using current graph: {state.execution_graph.description or 'N/A'}"
@@ -274,7 +285,7 @@ class OpenAPICoreLogic:
 
         graph_json = state.execution_graph.model_dump_json(indent=2)
         apis_ctx = "\n".join([f"- {a['operationId']}: {a['summary']}" for a in state.identified_apis[:10]])
-        prompt = f"Goal: \"{state.plan_generation_goal or 'General workflow'}\". Feedback: {state.graph_regeneration_reason or 'N/A'}. Current Graph (JSON):\n```json\n{graph_json}\n```\nAPIs (sample):\n{apis_ctx}\nRefine this graph. Focus: Goal alignment, logical flow, data flow (input_mappings like '$.id'), clarity. CRITICAL: All edge nodes MUST be in YOUR output's nodes list. Output ONLY refined GraphOutput JSON with a 'refinement_summary' field. Model:\n{{\"nodes\":[{{\"operationId\":\"id\",\"summary\":\"s\",\"description\":\"d\",\"payload_description\":\"p\",\"input_mappings\":[{{\"source_operation_id\":\"sid\",\"source_data_path\":\"spath\",\"target_parameter_name\":\"tpn\",\"target_parameter_in\":\"tin\"}}]}}],\"edges\":[{{\"from_node\":\"f\",\"to_node\":\"t\",\"description\":\"d\"}}],\"description\":\"desc\",\"refinement_summary\":\"summary\"}}"
+        prompt = f"Goal: \"{state.plan_generation_goal or 'General workflow'}\". Feedback: {state.graph_regeneration_reason or 'N/A. This might be the first refinement attempt or previous attempts were structurally okay.'}. Current Graph (JSON):\n```json\n{graph_json}\n```\nAPIs (sample):\n{apis_ctx}\nRefine this graph. Focus: Goal alignment, logical flow, data flow (input_mappings like '$.id'), clarity. CRITICAL: All edge nodes (from_node, to_node) MUST be defined with their operationId/display_name in YOUR output's nodes list. Output ONLY refined GraphOutput JSON with a 'refinement_summary' field. Model:\n{{\"nodes\":[{{\"operationId\":\"id\",\"summary\":\"s\",\"description\":\"d\",\"payload_description\":\"p\",\"input_mappings\":[{{\"source_operation_id\":\"sid\",\"source_data_path\":\"spath\",\"target_parameter_name\":\"tpn\",\"target_parameter_in\":\"tin\"}}]}}],\"edges\":[{{\"from_node\":\"f\",\"to_node\":\"t\",\"description\":\"d\"}}],\"description\":\"desc\",\"refinement_summary\":\"summary\"}}"
         try:
             raw_dict = parse_llm_json_output_with_model(llm_call_helper(self.worker_llm, prompt))
             if not raw_dict or not isinstance(raw_dict, dict): raise ValueError("Refinement LLM output not valid dict.")
@@ -287,11 +298,18 @@ class OpenAPICoreLogic:
             state.response = f"Graph refined (Iter {iteration}). Summary: {summary}"
             state.graph_regeneration_reason = None
             state.next_step = "verify_graph"
-        except Exception as e:
+        except Exception as e: # Catches LLM errors, parsing, or Pydantic validation
             logger.error(f"Error refining graph (iter {iteration}): {e}", exc_info=False)
             state.response = f"Error refining graph (iter {iteration}): {str(e)[:150]}..."
             state.graph_regeneration_reason = f"Refinement error (iter {iteration}): {str(e)[:100]}..."
-            state.next_step = "describe_graph" # Fallback to describe current potentially unrefined graph
+            # If quota error, don't retry refinement immediately, go describe current.
+            if "quota" in str(e).lower() or "429" in str(e):
+                state.next_step = "describe_graph"
+            elif iteration < state.max_refinement_iterations:
+                 state.next_step = "refine_api_graph" 
+            else:
+                 logger.warning(f"Max refinement iterations reached after error. Describing last valid graph (if any).")
+                 state.next_step = "describe_graph" 
         return state
 
     def describe_graph(self, state: BotState) -> BotState:
@@ -299,13 +317,14 @@ class OpenAPICoreLogic:
         logger.info("Executing describe_graph node.")
         if not state.execution_graph:
             state.response = state.response or "No execution graph available to describe."
+            logger.warning("describe_graph: No execution_graph found in state.")
         else:
             desc = state.execution_graph.description
             if not desc or len(desc) < 20:
                 nodes_str = "\n".join([f"- {n.effective_id}: {n.summary or n.operationId}" for n in state.execution_graph.nodes[:3]])
                 prompt = f"Describe API graph for goal '{state.plan_generation_goal or 'general use'}'. Nodes ({len(state.execution_graph.nodes)} total, sample):\n{nodes_str}\nExplain purpose & flow concisely."
                 try: desc = llm_call_helper(self.worker_llm, prompt)
-                except Exception as e: desc = f"Error generating dynamic desc: {e}. Stored: {state.execution_graph.description or 'N/A'}"
+                except Exception as e: desc = f"Error generating dynamic desc: {str(e)[:100]}... Stored: {state.execution_graph.description or 'N/A'}"
             state.response = f"Current API Workflow for '{state.plan_generation_goal or 'general use'}':\n{desc}"
             if state.execution_graph.refinement_summary: state.response += f"\nLast Refinement: {state.execution_graph.refinement_summary}"
         state.update_scratchpad_reason(tool_name, f"Described graph. Response set: {state.response[:100]}...")
@@ -350,7 +369,7 @@ class OpenAPICoreLogic:
 
         graph_sum = state.execution_graph.description if state.execution_graph else "No graph."
         pl_keys = list(state.payload_descriptions.keys())[:3]
-        prompt = f"User Query: \"{state.user_input}\"\nContext: API Summary: {state.schema_summary[:100]}... APIs: {len(state.identified_apis)}. Payloads for: {pl_keys}... Graph Goal: {state.plan_generation_goal or 'N/A'}. Graph Desc: {graph_sum[:100]}...\nInternal Actions: rerun_payload_generation(op_ids, new_context), contextualize_graph_descriptions(target_nodes, new_context), regenerate_graph_with_new_goal(new_goal), refine_existing_graph_further(instructions), answer_query_directly(query), synthesize_final_answer(instructions).\nTask: Understand query. Create JSON 'interactive_action_plan' (list of {{'action_name':'...', 'action_params':{{...}}, 'description':'...'}}). Also add 'user_query_understanding'. Output ONLY JSON."
+        prompt = f"User Query: \"{state.user_input}\"\nContext: API Summary: {state.schema_summary[:100] if state.schema_summary else 'N/A'}... APIs: {len(state.identified_apis)}. Payloads for: {pl_keys}... Graph Goal: {state.plan_generation_goal or 'N/A'}. Graph Desc: {graph_sum[:100]}...\nInternal Actions: rerun_payload_generation(op_ids, new_context), contextualize_graph_descriptions(target_nodes, new_context), regenerate_graph_with_new_goal(new_goal), refine_existing_graph_further(instructions), answer_query_directly(query), synthesize_final_answer(instructions).\nTask: Understand query. Create JSON 'interactive_action_plan' (list of {{'action_name':'...', 'action_params':{{...}}, 'description':'...'}}). Also add 'user_query_understanding'. Output ONLY JSON."
         try:
             data = parse_llm_json_output_with_model(llm_call_helper(self.worker_llm, prompt))
             if data and "interactive_action_plan" in data and isinstance(data["interactive_action_plan"], list):
@@ -370,10 +389,9 @@ class OpenAPICoreLogic:
         return f"Payloads updated for {op_ids} with context '{ctx[:30]}...'."
     def _internal_contextualize_graph(self, state: BotState, targets: Optional[List[str]], ctx: str) -> str:
         if not state.execution_graph: return "No graph to contextualize."
-        # Simplified: LLM updates overall description. More granular update is complex.
         prompt = f"New context: \"{ctx}\". Current graph desc: \"{state.execution_graph.description}\". Rewrite desc. New Desc:"
         try: state.execution_graph.description = llm_call_helper(self.worker_llm, prompt)
-        except: pass # Ignore if LLM fails here, keep old desc
+        except: pass 
         return f"Graph descriptions contextualized for '{ctx[:30]}...'."
     def _internal_answer_query_directly(self, state: BotState, query: str) -> str:
         orig_input, state.user_input = state.user_input, query
@@ -407,12 +425,12 @@ class OpenAPICoreLogic:
                 state.plan_generation_goal = params["new_goal_string"]; state.graph_refinement_iterations = 0; state.execution_graph = None
                 self._generate_execution_graph(state, goal=state.plan_generation_goal)
                 results.append(f"Started new graph for: {state.plan_generation_goal}"); state.scratchpad['current_interactive_results'] = results
-                return state # Main graph flow takes over
+                return state 
             elif name == "refine_existing_graph_further" and state.execution_graph:
                 state.graph_regeneration_reason = params.get("refinement_instructions","")
                 self.refine_api_graph(state)
                 results.append(f"Started graph refinement."); state.scratchpad['current_interactive_results'] = results
-                return state # Main graph flow takes over
+                return state 
             elif name == "answer_query_directly": state.response = self._internal_answer_query_directly(state, params.get("query_for_synthesizer", state.user_input or ""))
             elif name == "synthesize_final_answer": state.response = self._internal_synthesize_final_answer(state, params.get("synthesis_prompt_instructions","Summarize."))
             else: res_msg = f"Unknown action: {name}."
@@ -430,7 +448,7 @@ class OpenAPICoreLogic:
         tool_name = "handle_unknown"
         logger.warning(f"Executing {tool_name}. Current response (if any): {state.response}")
         # Preserve existing error message if one was set by a failing node
-        if not state.response or "error" not in state.response.lower(): # type: ignore
+        if not state.response or "error" not in str(state.response).lower(): 
             state.response = "I'm not sure how to process that. Could you rephrase or provide an OpenAPI spec first?"
         state.update_scratchpad_reason(tool_name, f"Handling unknown. Final response to be: {state.response}")
         state.next_step = "responder"
