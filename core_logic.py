@@ -7,7 +7,8 @@ import yaml
 from models import BotState, GraphOutput, Node, InputMapping # Edge is part of GraphOutput
 from utils import (
     llm_call_helper, load_cached_schema, save_schema_to_cache,
-    get_cache_key, check_for_cycles, parse_llm_json_output_with_model
+    get_cache_key, check_for_cycles, parse_llm_json_output_with_model,
+    SCHEMA_CACHE # <--- Added import for SCHEMA_CACHE
 )
 from pydantic import ValidationError
 
@@ -41,7 +42,8 @@ class OpenAPICoreLogic:
             return state
 
         cache_key = get_cache_key(spec_text)
-        cached_schema = load_cached_schema(cache_key)
+        # Use the imported load_cached_schema which internally uses SCHEMA_CACHE
+        cached_schema = load_cached_schema(cache_key) 
 
         if cached_schema:
             logger.info(f"Loaded schema from cache for key: {cache_key}")
@@ -50,7 +52,6 @@ class OpenAPICoreLogic:
             state.openapi_spec_text = spec_text
             state.openapi_spec_string = None
             
-            # Check if essential derived artifacts are also present or need regeneration
             if not state.schema_summary or not state.identified_apis or not state.payload_descriptions or not state.execution_graph:
                 logger.info("Cached schema loaded, but some derived artifacts missing. Proceeding to pipeline.")
                 state.response = "OpenAPI specification loaded from cache. Completing analysis..."
@@ -75,9 +76,9 @@ class OpenAPICoreLogic:
                 logger.debug("Successfully parsed spec as YAML.")
             except yaml.YAMLError as yaml_e:
                 error_message = f"YAML parsing failed: {yaml_e}"
-            except Exception as e_yaml: # Catch any other error during YAML load
+            except Exception as e_yaml: 
                 error_message = f"Unexpected error during YAML parsing: {e_yaml}"
-        except Exception as e_json: # Catch any other error during JSON load
+        except Exception as e_json: 
              error_message = f"Unexpected error during JSON parsing: {e_json}"
 
 
@@ -87,7 +88,13 @@ class OpenAPICoreLogic:
             state.schema_cache_key = cache_key
             state.openapi_spec_text = spec_text
             state.openapi_spec_string = None
-            if SCHEMA_CACHE: save_schema_to_cache(cache_key, parsed_schema) # Ensure SCHEMA_CACHE is not None
+            # Use the imported save_schema_to_cache which internally uses SCHEMA_CACHE
+            # The direct check `if SCHEMA_CACHE:` is still fine here as it's now imported.
+            if SCHEMA_CACHE: 
+                save_schema_to_cache(cache_key, parsed_schema) 
+            else:
+                logger.warning("SCHEMA_CACHE is None in core_logic.py, schema not saved to disk cache.")
+
             logger.info("Successfully parsed and cached OpenAPI spec.")
             state.response = "OpenAPI specification parsed. Analyzing..."
             state.update_scratchpad_reason(tool_name, "Schema parsed. Proceeding with pipeline.")
@@ -118,7 +125,6 @@ class OpenAPICoreLogic:
         description = info.get('description', 'No description.')
         paths_count = len(spec.get('paths', {}))
         
-        # Simple paths summary for prompt
         paths_preview = "\n".join([f"  {p}: {list(m.keys()) if isinstance(m, dict) else '[Invalid methods]'}" for p, m in list(spec.get('paths', {}).items())[:5]])
 
 
@@ -170,7 +176,7 @@ class OpenAPICoreLogic:
                     'description': op_details.get('description', ''),
                     'parameters': op_details.get('parameters', []),
                     'requestBody': op_details.get('requestBody', {}),
-                    'responses': op_details.get('responses', {}) # For response structure hints
+                    'responses': op_details.get('responses', {}) 
                 })
         state.identified_apis = apis
         logger.info(f"Identified {len(apis)} API operations.")
@@ -187,16 +193,13 @@ class OpenAPICoreLogic:
         payload_descs = state.payload_descriptions or {}
         apis_to_process = [api for api in state.identified_apis if (target_apis is None or api['operationId'] in target_apis)]
 
-        # Limit LLM calls for bulk generation, process a few at a time if needed
-        for api in apis_to_process[:30]: # Process up to 30, adjust as needed
+        for api in apis_to_process[:30]: 
             op_id = api['operationId']
-            # Skip if already generated and no context_override forcing regeneration
             if op_id in payload_descs and not context_override:
                 continue
 
             param_details = json.dumps(api.get('parameters', []), indent=2)[:500]
             body_details = json.dumps(api.get('requestBody', {}), indent=2)[:500]
-            # Try to get a hint of a successful response schema
             success_response_schema = "No specific 2xx response schema example available."
             responses = api.get('responses', {})
             for code, resp_def in responses.items():
@@ -247,7 +250,7 @@ class OpenAPICoreLogic:
 
         api_details_for_prompt = "\n".join([
             f"- opId: {api['operationId']}, method: {api['method']}, path: {api['path']}, summary: {api['summary']}"
-            for api in state.identified_apis[:50] # Limit for prompt
+            for api in state.identified_apis[:50] 
         ])
         
         current_goal = goal or state.plan_generation_goal or "Provide a general, illustrative workflow using a few key APIs."
@@ -298,20 +301,19 @@ class OpenAPICoreLogic:
             if graph_output:
                 state.execution_graph = graph_output
                 state.response = "API execution graph generated."
-                state.graph_regeneration_reason = None # Clear on success
-                state.graph_refinement_iterations = 0 # Reset for new graph
+                state.graph_regeneration_reason = None 
+                state.graph_refinement_iterations = 0 
                 state.next_step = "verify_graph"
             else:
                 logger.error("LLM failed to produce valid GraphOutput JSON for execution graph.")
                 state.response = "Failed to generate a valid execution graph (AI format error)."
                 state.graph_regeneration_reason = "LLM output format was incorrect."
-                # Simple retry: if it fails once, try again. If more complex, needs better state.
                 if state.scratchpad.get('graph_gen_attempts', 0) < 1:
                     state.scratchpad['graph_gen_attempts'] = state.scratchpad.get('graph_gen_attempts', 0) + 1
-                    state.next_step = "_generate_execution_graph" # Route to self for one retry
+                    state.next_step = "_generate_execution_graph" 
                 else:
-                    state.next_step = "handle_unknown" # Give up
-                    state.scratchpad['graph_gen_attempts'] = 0 # Reset
+                    state.next_step = "handle_unknown" 
+                    state.scratchpad['graph_gen_attempts'] = 0 
         except Exception as e:
             logger.error(f"Error generating execution graph: {e}", exc_info=True)
             state.response = f"Error generating graph: {e}"
@@ -331,26 +333,21 @@ class OpenAPICoreLogic:
             state.next_step = "handle_unknown"
             return state
         
-        # Reset relevant state fields for a fresh processing run
         state.schema_summary = None
         state.identified_apis = []
         state.payload_descriptions = {}
         state.execution_graph = None
-        state.plan_generation_goal = state.plan_generation_goal or "Provide a general overview workflow." # Set a default goal if none
+        state.plan_generation_goal = state.plan_generation_goal or "Provide a general overview workflow." 
         state.graph_refinement_iterations = 0
         state.scratchpad['graph_gen_attempts'] = 0
 
-
         self._generate_llm_schema_summary(state)
         self._identify_apis_from_schema(state)
-        if state.identified_apis: # Only generate payloads if APIs were found
-            self._generate_payload_descriptions(state) # Generate for all initially
+        if state.identified_apis: 
+            self._generate_payload_descriptions(state) 
 
-        # Generate initial graph
-        self = self._generate_execution_graph(state, goal=state.plan_generation_goal) # This will set next_step
+        self._generate_execution_graph(state, goal=state.plan_generation_goal) 
 
-        # _generate_execution_graph sets next_step to "verify_graph" on success or error handling.
-        # No further routing logic needed here for that path.
         state.update_scratchpad_reason(tool_name, f"Schema pipeline processing initiated. Next step set to: {state.next_step}")
         return state
 
@@ -363,44 +360,41 @@ class OpenAPICoreLogic:
         if not state.execution_graph:
             state.response = "No execution graph to verify."
             state.graph_regeneration_reason = "No graph was generated to verify."
-            state.next_step = "_generate_execution_graph" # Try to generate it
+            state.next_step = "_generate_execution_graph" 
             return state
 
         is_dag, cycle_message = check_for_cycles(state.execution_graph)
-        # Additional Pydantic validation happens in GraphOutput model itself (unique IDs, edge refs)
 
-        if is_dag: # And Pydantic validation in GraphOutput model was implicitly successful if we have an object
+        if is_dag: 
             state.response = "Graph verification successful: No cycles found and structure seems valid."
             state.update_scratchpad_reason(tool_name, "Graph verification successful.")
             logger.info("Graph verification successful.")
-            state.graph_regeneration_reason = None # Clear reason
+            state.graph_regeneration_reason = None 
 
-            # After initial generation and verification, proceed to first refinement
             if state.graph_refinement_iterations < state.max_refinement_iterations:
                 state.next_step = "refine_api_graph"
-            else: # Max refinements done, or refinement not desired after this verification
-                if state.input_is_spec: # This was the end of initial processing
-                    api_title = state.openapi_schema.get('info', {}).get('title', 'the API')
+            else: 
+                if state.input_is_spec: 
+                    api_title = state.openapi_schema.get('info', {}).get('title', 'the API') # type: ignore
                     state.response = (
                         f"Successfully processed '{api_title}'. Identified {len(state.identified_apis)} APIs, "
                         f"generated payload examples, and created an API workflow graph with {len(state.execution_graph.nodes)} steps. "
                         "You can now ask questions or request specific plan refinements."
                     )
-                    state.input_is_spec = False # Reset flag
+                    state.input_is_spec = False 
                     state.next_step = "responder"
-                else: # Verification was likely triggered by user or after refinement
+                else: 
                     state.response = "Graph verification successful. " + (state.execution_graph.refinement_summary or "")
-                    state.next_step = "describe_graph" # Or responder
+                    state.next_step = "describe_graph" 
         else:
             state.response = f"Graph verification failed: {cycle_message}. "
             state.graph_regeneration_reason = f"Verification failed: {cycle_message}."
             state.update_scratchpad_reason(tool_name, f"Graph verification failed: {cycle_message}.")
             logger.warning(f"Graph verification failed: {cycle_message}. Routing to refine/regenerate.")
-            # If verification fails, try to refine (which might fix it) or regenerate if refinement also fails
             if state.graph_refinement_iterations < state.max_refinement_iterations :
-                 state.next_step = "refine_api_graph" # Try to let refinement fix it
+                 state.next_step = "refine_api_graph" 
             else:
-                 state.next_step = "_generate_execution_graph" # Fallback to full regeneration
+                 state.next_step = "_generate_execution_graph" 
         return state
 
     def refine_api_graph(self, state: BotState) -> BotState:
@@ -417,13 +411,13 @@ class OpenAPICoreLogic:
 
         if iteration > state.max_refinement_iterations:
             state.response = f"Max refinement iterations ({state.max_refinement_iterations}) reached. Using current graph."
-            state.next_step = "describe_graph" # Or "get_graph_json" / "responder"
+            state.next_step = "describe_graph" 
             return state
 
         current_graph_json = state.execution_graph.model_dump_json(indent=2)
         api_context_for_refinement = "\n".join([
             f"- opId: {api['operationId']}, summary: {api['summary']}"
-            for api in state.identified_apis[:30] # Limit for prompt context
+            for api in state.identified_apis[:30] 
         ])
 
         refinement_prompt = f"""
@@ -474,7 +468,6 @@ class OpenAPICoreLogic:
         """
         try:
             llm_response_str = llm_call_helper(self.worker_llm, refinement_prompt)
-            # Parse as dict first to extract refinement_summary, then as GraphOutput
             raw_output_dict = parse_llm_json_output_with_model(llm_response_str)
 
             if not raw_output_dict or not isinstance(raw_output_dict, dict):
@@ -483,24 +476,23 @@ class OpenAPICoreLogic:
             refinement_summary = raw_output_dict.pop("refinement_summary", "No specific summary from AI.")
             state.update_scratchpad_reason(tool_name, f"LLM Refinement Summary: {refinement_summary}")
 
-            refined_graph = GraphOutput.model_validate(raw_output_dict) # Validate the rest
+            refined_graph = GraphOutput.model_validate(raw_output_dict) 
             
             state.execution_graph = refined_graph
             state.graph_refinement_iterations = iteration
             state.response = f"Graph refined (Iteration {iteration}). Summary: {refinement_summary}"
-            state.graph_regeneration_reason = None # Clear reason after successful refinement attempt
-            state.next_step = "verify_graph" # Always verify after refinement
+            state.graph_regeneration_reason = None 
+            state.next_step = "verify_graph" 
 
-        except (ValueError, ValidationError) as e: # Catches parsing or Pydantic validation errors
+        except (ValueError, ValidationError) as e: 
             logger.error(f"Error processing refined graph: {e}", exc_info=True)
             state.response = f"Error during graph refinement: {e}. Using previous graph."
-            state.graph_regeneration_reason = f"Refinement error: {e}" # Pass feedback for next attempt
-            # Decide if we should retry refinement or give up and show current graph
+            state.graph_regeneration_reason = f"Refinement error: {e}" 
             if iteration < state.max_refinement_iterations:
-                 state.next_step = "refine_api_graph" # Retry refinement with feedback
+                 state.next_step = "refine_api_graph" 
             else:
-                 state.next_step = "describe_graph" # Give up on refinement
-        except Exception as e: # Catch other LLM call errors etc.
+                 state.next_step = "describe_graph" 
+        except Exception as e: 
             logger.error(f"Unexpected error during graph refinement: {e}", exc_info=True)
             state.response = f"Unexpected error refining graph: {e}. Using previous graph."
             state.graph_regeneration_reason = f"Unexpected refinement error: {e}"
@@ -515,9 +507,8 @@ class OpenAPICoreLogic:
         if not state.execution_graph:
             state.response = "No execution graph to describe."
         else:
-            # Use the graph's own description, or generate one if missing/brief
             graph_desc = state.execution_graph.description
-            if not graph_desc or len(graph_desc) < 50: # If too short or missing
+            if not graph_desc or len(graph_desc) < 50: 
                 nodes_summary = "\n".join([f"- {node.effective_id}: {node.summary or node.operationId}" for node in state.execution_graph.nodes[:5]])
                 prompt = f"""
                 Describe the following API execution graph workflow in natural language.
@@ -566,18 +557,16 @@ class OpenAPICoreLogic:
             state.next_step = "responder"
             return state
 
-        # Context for the LLM
         context_parts = [
             f"User Question: \"{user_input}\"",
             f"API Summary: {state.schema_summary or 'Not available.'}",
             f"Identified APIs ({len(state.identified_apis)} total): " + ", ".join([api['operationId'] for api in state.identified_apis[:10]]) + "...",
             f"Current Graph Goal: {state.plan_generation_goal or 'General overview'}",
             f"Graph Description: {state.execution_graph.description if state.execution_graph else 'Not available.'}",
-            # Add more context as needed, e.g., specific payload descriptions if query mentions an API
         ]
-        if user_input and any(op_id in user_input for op_id in state.payload_descriptions):
+        if user_input and any(op_id in user_input for op_id in state.payload_descriptions): # type: ignore
             for op_id, desc in state.payload_descriptions.items():
-                if op_id in user_input: # Simple check
+                if op_id in user_input: # type: ignore
                     context_parts.append(f"Payload/Response for '{op_id}': {desc[:300]}...")
                     break
         
@@ -590,19 +579,16 @@ class OpenAPICoreLogic:
         state.next_step = "responder"
         return state
 
-    # --- Interactive Phase Methods ---
     def interactive_query_planner(self, state: BotState) -> BotState:
         """LLM plans internal actions to address a complex user query."""
         tool_name = "interactive_query_planner"
         state.update_scratchpad_reason(tool_name, f"Planning internal actions for user query: {state.user_input}")
         logger.info(f"Executing {tool_name} for query: {state.user_input}")
 
-        # Clear previous interactive plan from scratchpad
         state.scratchpad.pop('interactive_action_plan', None)
         state.scratchpad.pop('current_interactive_action_idx', None)
         state.scratchpad.pop('current_interactive_results', None)
 
-        # Context for the planner LLM
         graph_summary = state.execution_graph.description if state.execution_graph else "No graph loaded."
         payload_keys = list(state.payload_descriptions.keys())[:5]
 
@@ -612,7 +598,7 @@ class OpenAPICoreLogic:
         User Query: "{state.user_input}"
 
         Current State Context:
-        - API Spec Summary: {state.schema_summary[:300]}...
+        - API Spec Summary: {state.schema_summary[:300] if state.schema_summary else 'N/A'}...
         - Identified APIs (first 5 opIds): {", ".join([api['operationId'] for api in state.identified_apis[:5]])}...
         - Example Payload Descriptions available for (first 5 opIds): {payload_keys}...
         - Current Execution Graph Goal: {state.plan_generation_goal or 'N/A'}
@@ -664,7 +650,7 @@ class OpenAPICoreLogic:
         except Exception as e:
             logger.error(f"Error in interactive_query_planner: {e}", exc_info=True)
             state.response = f"Sorry, I had trouble planning how to address your request: {e}. Try rephrasing?"
-            state.next_step = "responder" # Fallback
+            state.next_step = "responder" 
         return state
 
     def _internal_rerun_payload_generation(self, state: BotState, operation_ids_to_update: List[str], new_context: str) -> str:
@@ -681,10 +667,7 @@ class OpenAPICoreLogic:
         logger.info(f"Internal: Contextualizing graph descriptions for nodes {target_node_op_ids or 'all'} with context: {new_context}")
         
         changed_nodes_count = 0
-        # For simplicity, let's try to update the main graph description and targeted nodes
-        # A more complex approach would be LLM-driven editing of specific node/edge descriptions.
         
-        # Update overall graph description
         prompt_overall = f"""
         Given the new context: "{new_context}"
         And the current graph description: "{state.execution_graph.description}"
@@ -692,13 +675,13 @@ class OpenAPICoreLogic:
         New Description:
         """
         try:
-            state.execution_graph.description = llm_call_helper(self.worker_llm, prompt_overall)
-            changed_nodes_count +=1 # Count this as one change
+            if state.execution_graph: # Ensure graph exists
+                 state.execution_graph.description = llm_call_helper(self.worker_llm, prompt_overall)
+                 changed_nodes_count +=1 
         except Exception as e:
             logger.error(f"Failed to update overall graph description with context: {e}")
 
-        # Update targeted node descriptions (simplified)
-        if target_node_op_ids:
+        if target_node_op_ids and state.execution_graph: # Ensure graph exists
             for node in state.execution_graph.nodes:
                 if node.effective_id in target_node_op_ids:
                     prompt_node = f"""
@@ -723,13 +706,12 @@ class OpenAPICoreLogic:
     def _internal_answer_query_directly(self, state: BotState, query_for_synthesizer: str) -> str:
         """Internal: Uses the main answer_openapi_query with specific query."""
         logger.info(f"Internal: Answering query directly: {query_for_synthesizer}")
-        # Temporarily set user_input for answer_openapi_query
         original_user_input = state.user_input
         state.user_input = query_for_synthesizer
-        self.answer_openapi_query(state) # This sets state.response
+        self.answer_openapi_query(state) 
         direct_answer = state.response
-        state.user_input = original_user_input # Restore
-        state.response = None # Clear intermediate response from answer_openapi_query
+        state.user_input = original_user_input 
+        state.response = None 
         return direct_answer or "Could not formulate a direct answer."
 
     def _internal_synthesize_final_answer(self, state: BotState, synthesis_prompt_instructions: str) -> str:
@@ -747,13 +729,12 @@ class OpenAPICoreLogic:
         {interactive_results_summary or "No specific internal actions taken or results logged."}
 
         Current Graph Description (if relevant): {state.execution_graph.description if state.execution_graph else "N/A"}
-        Relevant Payload Snippet (if any action updated one, provide it here if you have it): ...
-
+        
         Formulate a concise, helpful, and direct answer to the user.
         """
         try:
             final_answer = llm_call_helper(self.worker_llm, prompt)
-            state.response = final_answer # Set the main response for the responder
+            state.response = final_answer 
             return final_answer
         except Exception as e:
             logger.error(f"Error synthesizing final answer: {e}")
@@ -772,7 +753,7 @@ class OpenAPICoreLogic:
         if not action_plan or action_idx >= len(action_plan):
             logger.info("Interactive action plan finished or empty.")
             state.update_scratchpad_reason(tool_name, "Interactive plan finished.")
-            if not state.response: # If no action explicitly set state.response (e.g. synthesize_final_answer)
+            if not state.response: 
                  state.response = "Finished processing your interactive request. What's next?"
             state.next_step = "responder"
             return state
@@ -786,7 +767,7 @@ class OpenAPICoreLogic:
         logger.info(f"Executing interactive action: {action_name} with params: {action_params}")
         
         action_result_message = f"Action '{action_name}' executed."
-        current_step_response = "" # For intermediate messages to user
+        current_step_response = "" 
 
         try:
             if action_name == "rerun_payload_generation":
@@ -809,52 +790,41 @@ class OpenAPICoreLogic:
                 new_goal = action_params.get("new_goal_string", "")
                 if new_goal:
                     state.plan_generation_goal = new_goal
-                    state.graph_refinement_iterations = 0 # Reset for new graph
-                    state.execution_graph = None # Clear old graph
-                    # This will trigger the full generation and refinement flow
-                    self._generate_execution_graph(state, goal=new_goal) # This sets its own next_step
+                    state.graph_refinement_iterations = 0 
+                    state.execution_graph = None 
+                    self._generate_execution_graph(state, goal=new_goal) 
                     action_result_message = f"Started regenerating graph for new goal: {new_goal}"
                     current_step_response = action_result_message
-                    # IMPORTANT: _generate_execution_graph sets state.next_step. We must honor it.
-                    # We can't just proceed to the next interactive action if a whole new graph pipeline is running.
-                    # So, if this action is called, the interactive plan effectively pauses or ends,
-                    # and the main graph takes over. This needs careful thought in router/planner.
-                    # For now, let's assume this action means the *current interactive plan* is superseded.
                     interactive_results.append(action_result_message)
                     state.scratchpad['current_interactive_results'] = interactive_results
                     logger.info(f"Interactive action '{action_name}' triggered main graph regeneration. Interactive plan execution will not continue to next step immediately.")
-                    # state.next_step is already set by _generate_execution_graph
-                    return state # Exit early, main graph flow takes over
+                    return state 
                 else: action_result_message = "Skipped regenerate_graph_with_new_goal: missing new_goal_string."
 
             elif action_name == "refine_existing_graph_further":
                 instructions = action_params.get("refinement_instructions", "")
                 if state.execution_graph:
-                    state.graph_regeneration_reason = instructions # Use this field for feedback
-                    self.refine_api_graph(state) # This sets its own next_step (to verify_graph)
+                    state.graph_regeneration_reason = instructions 
+                    self.refine_api_graph(state) 
                     action_result_message = f"Started further refinement of graph based on: {instructions[:50]}..."
                     current_step_response = action_result_message
-                    # Similar to regenerate, this action hands off to another part of the main graph.
                     interactive_results.append(action_result_message)
                     state.scratchpad['current_interactive_results'] = interactive_results
                     logger.info(f"Interactive action '{action_name}' triggered main graph refinement. Interactive plan execution will not continue to next step immediately.")
-                    # state.next_step is already set by refine_api_graph
-                    return state # Exit early
+                    return state 
                 else: action_result_message = "Skipped refine_existing_graph_further: no graph to refine."
 
             elif action_name == "answer_query_directly":
-                query = action_params.get("query_for_synthesizer", state.user_input) # Fallback to original user input
-                direct_answer = self._internal_answer_query_directly(state, query)
+                query = action_params.get("query_for_synthesizer", state.user_input) 
+                direct_answer = self._internal_answer_query_directly(state, query or "") # Ensure query is not None
                 action_result_message = f"Direct answer attempt: {direct_answer[:100]}..."
-                # This action *produces* the user-facing response.
-                state.response = direct_answer # Set the main response
+                state.response = direct_answer 
 
             elif action_name == "synthesize_final_answer":
                 instructions = action_params.get("synthesis_prompt_instructions", "Summarize findings for the user.")
                 final_answer = self._internal_synthesize_final_answer(state, instructions)
                 action_result_message = f"Final answer synthesized: {final_answer[:100]}..."
-                # This action *produces* the user-facing response.
-                state.response = final_answer # Set the main response
+                state.response = final_answer 
             
             else:
                 action_result_message = f"Unknown interactive action: {action_name}. Skipped."
@@ -868,21 +838,19 @@ class OpenAPICoreLogic:
         state.scratchpad['current_interactive_results'] = interactive_results
         state.scratchpad['current_interactive_action_idx'] = action_idx + 1
         
-        # Provide intermediate feedback to user if defined
-        if current_step_response and not state.response: # Don't overwrite if synthesize_final_answer already set it
+        if current_step_response and not state.response: 
             state.response = current_step_response
-        elif not state.response: # Default intermediate if nothing specific
+        elif not state.response: 
              state.response = f"Completed internal step: {action_description[:50]}..."
 
 
-        # Decide next step for the interactive executor
         if state.scratchpad['current_interactive_action_idx'] < len(action_plan):
-            state.next_step = "interactive_query_executor" # More actions in this plan
+            state.next_step = "interactive_query_executor" 
         else:
             logger.info("All interactive actions executed.")
-            if not state.response: # If last action didn't set a final response
+            if not state.response: 
                  state.response = "Finished processing your request based on the interactive plan."
-            state.next_step = "responder" # Plan finished
+            state.next_step = "responder" 
 
         return state
 
@@ -905,6 +873,6 @@ class OpenAPICoreLogic:
         state.update_scratchpad_reason(tool_name, "Handling potential loop.")
         logger.warning("Executing handle_loop node. Loop detected.")
         state.response = "It seems we're in a processing loop. Could you please rephrase or try a different request?"
-        state.loop_counter = 0 # Reset
+        state.loop_counter = 0 
         state.next_step = "responder"
         return state
