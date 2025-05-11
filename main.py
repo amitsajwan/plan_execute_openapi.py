@@ -175,7 +175,7 @@ async def websocket_endpoint(websocket: WebSocket):
 HTML_TEST_PAGE = """
 <!DOCTYPE html>
 <html>
-<head><title>OpenAPI Agent (Gemini)</title><style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;margin:0;background-color:#f0f2f5;color:#333;display:flex;flex-direction:column;height:100vh}.header{background-color:#4A90E2;color:#fff;padding:15px 20px;text-align:center;font-size:1.2em;box-shadow:0 2px 4px rgba(0,0,0,.1)}.main-container{display:flex;flex-grow:1;overflow:hidden;padding:10px;gap:10px}.graph-view-container{width:35%;min-width:350px;max-width:40%;background-color:#2d3748;color:#e2e8f0;padding:15px;border-radius:8px;display:flex;flex-direction:column;overflow-y:auto;font-family:Menlo,Monaco,'Courier New',monospace;font-size:.85em}.graph-view-container h2{margin-top:0;color:#90cdf4;border-bottom:1px solid #4a5568;padding-bottom:10px}#graphJsonView{flex-grow:1;white-space:pre-wrap;word-wrap:break-word;overflow-y:auto;padding:5px;background-color:#1a202c;border-radius:4px}#graphJsonView pre{margin:0;background-color:transparent!important;color:#e2e8f0!important;padding:0!important}.chat-container{display:flex;flex-direction:column;flex-grow:1;background-color:#fff;border-radius:8px;box-shadow:0 0 15px rgba(0,0,0,.1);overflow:hidden}#messages{flex-grow:1;padding:20px;overflow-y:scroll;border-bottom:1px solid #e0e0e0}.message{padding:10px 15px;margin-bottom:10px;border-radius:18px;max-width:85%;word-wrap:break-word;line-height:1.5;font-size:0.95em}.user{background-color:#007bff;color:#fff;align-self:flex-end;margin-left:15%;border-bottom-right-radius:5px}.agent{background-color:#e9ecef;color:#343a40;align-self:flex-start;margin-right:15%;border-bottom-left-radius:5px}.agent h4{margin-top:0;margin-bottom:8px;color:#155724;font-size:1.05em}.agent ul{padding-left:20px;margin-top:5px;margin-bottom:5px}.agent li{margin-bottom:3px}.error{background-color:#f8d7da;color:#721c24;border:1px solid #f5c6cb;padding:10px}.info{background-color:#d4edda;color:#155724;font-style:italic;text-align:center;padding:6px;font-size:.9em;border-radius:8px}.status{background-color:#fff3cd;color:#856404;font-style:italic;text-align:center;padding:6px;font-size:.9em;border-radius:8px}.intermediate{background-color:#e0e0e0;color:#555;font-style:italic;font-size:.85em;margin-right:30%;align-self:flex-start;border-radius:12px;border-bottom-left-radius:5px}#inputArea{display:flex;padding:15px;border-top:1px solid #e0e0e0;background-color:#f8f9fa}textarea{flex-grow:1;padding:12px 15px;border-radius:20px;border:1px solid #ced4da;resize:none;min-height:24px;max-height:120px;overflow-y:auto;font-size:1em;line-height:1.5}button{padding:0 20px;margin-left:10px;border:none;background-color:#007bff;color:#fff;border-radius:20px;cursor:pointer;font-size:1em;display:flex;align-items:center;justify-content:center;height:48px}button:hover{background-color:#0056b3}.thinking-indicator{width:18px;height:18px;border:3px solid hsla(210,100%,50%,.2);border-top-color:#007bff;border-radius:50%;animation:spin .8s linear infinite;display:none;margin-left:8px}@keyframes spin{to{transform:rotate(360deg)}}button span{margin-right:5px}pre{background-color:#282c34;color:#e2e8f0;padding:1em;border-radius:6px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word;font-family:Menlo,Monaco,'Courier New',monospace;font-size:.9em}</style></head>
+<head><title>OpenAPI Agent (Gemini)</title><style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;margin:0;background-color:#f0f2f5;color:#333;display:flex;flex-direction:column;height:100vh}.header{background-color:#4A90E2;color:#fff;padding:15px 20px;text-align:center;font-size:1.2em;box-shadow:0 2px 4px rgba(0,0,0,.1)}.main-container{display:flex;flex-grow:1;overflow:hidden;padding:10px;gap:10px}.graph-view-container{width:35%;min-width:350px;max-width:40%;background-color:#2d3748;color:#e2e8f0;padding:15px;border-radius:8px;display:flex;flex-direction:column;overflow-y:auto;font-family:Menlo,Monaco,'Courier New',monospace;font-size:.85em}.graph-view-container h2{margin-top:0;color:#90cdf4;border-bottom:1px solid #4a5568;padding-bottom:10px}#graphJsonView{flex-grow:1;white-space:pre-wrap;word-wrap:break-word;overflow-y:auto;padding:5px;background-color:#1a202c;border-radius:4px}#graphJsonView pre{margin:0;background-color:transparent!important;color:#e2e8f0!important;padding:0!important}.chat-container{display:flex;flex-direction:column;flex-grow:1;background-color:#fff;border-radius:8px;box-shadow:0 0 15px rgba(0,0,0,.1);overflow:hidden}#messages{flex-grow:1;padding:20px;overflow-y:scroll;border-bottom:1px solid #e0e0e0}.message{padding:10px 15px;margin-bottom:10px;border-radius:18px;max-width:85%;word-wrap:break-word;line-height:1.5;font-size:0.95em}.user{background-color:#007bff;color:#fff;align-self:flex-end;margin-left:15%;border-bottom-right-radius:5px}.agent{background-color:#e9ecef;color:#343a40;align-self:flex-start;margin-right:15%;border-bottom-left-radius:5px}.agent h4{margin-top:0;margin-bottom:8px;color:#00529B;font-size:1.1em;border-bottom:1px solid #ddd;padding-bottom:4px;}.agent h5{margin-top:0;margin-bottom:6px;color:#333;font-size:1.05em;}.agent h6{margin-top:0;margin-bottom:4px;color:#555;font-size:1em;}.agent ul{padding-left:20px;margin-top:5px;margin-bottom:10px;list-style-type:disc;}.agent li{margin-bottom:4px;}.agent p{margin-top:0;margin-bottom:10px;}.agent pre{margin-bottom:10px;}.error{background-color:#f8d7da;color:#721c24;border:1px solid #f5c6cb;padding:10px}.info{background-color:#d4edda;color:#155724;font-style:italic;text-align:center;padding:6px;font-size:.9em;border-radius:8px}.status{background-color:#fff3cd;color:#856404;font-style:italic;text-align:center;padding:6px;font-size:.9em;border-radius:8px}.intermediate{background-color:#e0e0e0;color:#555;font-style:italic;font-size:.85em;margin-right:30%;align-self:flex-start;border-radius:12px;border-bottom-left-radius:5px}#inputArea{display:flex;padding:15px;border-top:1px solid #e0e0e0;background-color:#f8f9fa}textarea{flex-grow:1;padding:12px 15px;border-radius:20px;border:1px solid #ced4da;resize:none;min-height:24px;max-height:120px;overflow-y:auto;font-size:1em;line-height:1.5}button{padding:0 20px;margin-left:10px;border:none;background-color:#007bff;color:#fff;border-radius:20px;cursor:pointer;font-size:1em;display:flex;align-items:center;justify-content:center;height:48px}button:hover{background-color:#0056b3}.thinking-indicator{width:18px;height:18px;border:3px solid hsla(210,100%,50%,.2);border-top-color:#007bff;border-radius:50%;animation:spin .8s linear infinite;display:none;margin-left:8px}@keyframes spin{to{transform:rotate(360deg)}}button span{margin-right:5px}pre{background-color:#282c34;color:#e2e8f0;padding:1em;border-radius:6px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word;font-family:Menlo,Monaco,'Courier New',monospace;font-size:.9em}</style></head>
 <body><div class=header>OpenAPI Multi-view Agent (Gemini LLM)</div><div class=main-container><div class=graph-view-container><h2>Execution Graph (JSON)</h2><div id=graphJsonView><pre>No graph loaded yet.</pre></div></div><div class=chat-container><div id=messages></div><div id=inputArea><textarea id=messageInput placeholder="Paste OpenAPI spec (JSON/YAML) or ask a question..."rows=1></textarea><button id=sendButton onclick=sendMessage()><span>Send</span><div class=thinking-indicator id=thinkingIndicator></div></button></div></div></div>
 <script>
 const messagesDiv=document.getElementById("messages"),messageInput=document.getElementById("messageInput"),graphJsonView=document.getElementById("graphJsonView").querySelector("pre"),sendButton=document.getElementById("sendButton"),thinkingIndicator=document.getElementById("thinkingIndicator");let ws;
@@ -187,71 +187,85 @@ function formatMessageContent(contentStr, type) {
         return '<pre>' + escapeHtml(JSON.stringify(contentStr, null, 2)) + '</pre>';
     }
 
-    // Only apply rich formatting for 'final' agent messages
-    if (type !== 'agent' && type !== 'final') { // Type 'agent' is used by default if not specified
-        return escapeHtml(contentStr);
+    // Apply rich formatting only for 'final' or 'agent' (default) message types
+    if (type !== 'agent' && type !== 'final') {
+        return escapeHtml(contentStr); // Basic escaping for other types
     }
     
-    let htmlContent = '';
-    const lines = contentStr.split('\\n'); // Correctly split by newline character
-    let inCodeBlock = false;
+    let html = '';
+    // Pre-process to handle code blocks first, replacing them with placeholders
+    const codeBlockPlaceholders = [];
+    contentStr = contentStr.replace(/```(\w*)\n([\s\S]*?)\n```/g, (match, lang, code) => {
+        const placeholder = `__CODEBLOCK_${codeBlockPlaceholders.length}__`;
+        codeBlockPlaceholders.push('<pre><code class="language-' + escapeHtml(lang || 'plaintext') + '">' + escapeHtml(code) + '</code></pre>');
+        return placeholder;
+    });
+     contentStr = contentStr.replace(/```\n([\s\S]*?)\n```/g, (match, code) => { // For code blocks without lang
+        const placeholder = `__CODEBLOCK_${codeBlockPlaceholders.length}__`;
+        codeBlockPlaceholders.push('<pre><code>' + escapeHtml(code) + '</code></pre>');
+        return placeholder;
+    });
+
+
+    const lines = contentStr.split('\\n'); // Split by actual escaped newline from Python string
     let inList = false;
+    let paragraphBuffer = [];
+
+    function flushParagraph() {
+        if (paragraphBuffer.length > 0) {
+            html += `<p>${paragraphBuffer.join(' ')}</p>`; // Join with space for wrapped lines
+            paragraphBuffer = [];
+        }
+    }
 
     for (let i = 0; i < lines.length; i++) {
-        let line = lines[i];
+        let line = lines[i]; // No trim here yet, preserve leading spaces for lists/indentation
 
-        if (line.startsWith("```json")) {
-            if (inList) { htmlContent += '</ul>'; inList = false; }
-            htmlContent += '<pre><code class="language-json">';
-            inCodeBlock = true;
-            line = line.substring(7); // Remove ```json
-        } else if (line.startsWith("```") && inCodeBlock) {
-            htmlContent += '</code></pre>';
-            inCodeBlock = false;
-            continue; 
-        } else if (line.startsWith("```")) { // Generic code block start
-             if (inList) { htmlContent += '</ul>'; inList = false; }
-            htmlContent += '<pre><code>';
-            inCodeBlock = true;
-            line = line.substring(3);
+        if (line.startsWith("### ")) {
+            flushParagraph(); if (inList) { html += '</ul>'; inList = false; }
+            html += `<h4>${escapeHtml(line.substring(4))}</h4>`;
+        } else if (line.startsWith("## ")) {
+            flushParagraph(); if (inList) { html += '</ul>'; inList = false; }
+            html += `<h5>${escapeHtml(line.substring(3))}</h5>`;
+        } else if (line.startsWith("# ")) {
+            flushParagraph(); if (inList) { html += '</ul>'; inList = false; }
+            html += `<h6>${escapeHtml(line.substring(2))}</h6>`;
+        } else if (line.startsWith("- ") || line.startsWith("* ")) {
+            flushParagraph();
+            if (!inList) {
+                html += '<ul>';
+                inList = true;
+            }
+            html += `<li>${escapeHtml(line.substring(line.startsWith("- ") ? 2 : 1).trim())}</li>`;
+        } else if (line.startsWith("__CODEBLOCK_")) { // Check for placeholder
+            flushParagraph(); if (inList) { html += '</ul>'; inList = false; }
+            const placeholderIndex = parseInt(line.substring("__CODEBLOCK_".length, line.lastIndexOf("__")));
+            html += codeBlockPlaceholders[placeholderIndex];
         }
-
-
-        if (inCodeBlock) {
-            htmlContent += escapeHtml(line) + (i < lines.length - 1 ? '\\n' : ''); // Preserve newlines in code
-        } else {
-            if (line.startsWith("### ")) {
-                if (inList) { htmlContent += '</ul>'; inList = false; }
-                htmlContent += `<h4>${escapeHtml(line.substring(4))}</h4>`;
-            } else if (line.startsWith("## ")) {
-                if (inList) { htmlContent += '</ul>'; inList = false; }
-                htmlContent += `<h5>${escapeHtml(line.substring(3))}</h5>`;
-            } else if (line.startsWith("# ")) {
-                 if (inList) { htmlContent += '</ul>'; inList = false; }
-                htmlContent += `<h6>${escapeHtml(line.substring(2))}</h6>`;
-            } else if (line.startsWith("- ") || line.startsWith("* ")) {
-                if (!inList) {
-                    htmlContent += '<ul>';
-                    inList = true;
-                }
-                htmlContent += `<li>${escapeHtml(line.substring(line.startsWith("- ") ? 2 : 1))}</li>`;
+         else { // Regular text line
+            if (inList && line.trim() !== "") { // If in a list and line is not empty, assume it's part of the current list item or a new one if indented
+                // This part is tricky for multi-line list items without more complex parsing
+                // For now, treat as new paragraph if it doesn't also start with - or *
+                 if (!line.trim().startsWith("- ") && !line.trim().startsWith("* ")) {
+                    html += '</ul>'; inList = false;
+                    if (line.trim() !== "") paragraphBuffer.push(escapeHtml(line.trim()));
+                 } else { // it's a new list item
+                     htmlContent += `<li>${escapeHtml(line.substring(line.startsWith("- ") ? 2 : 1).trim())}</li>`;
+                 }
+            } else if (inList && line.trim() === "") { // Blank line ends a list
+                 html += '</ul>'; inList = false;
+            }
+            else if (line.trim() === "") {
+                flushParagraph(); // Empty line signifies a paragraph break
             } else {
-                if (inList) {
-                    htmlContent += '</ul>';
-                    inList = false;
-                }
-                if (line.trim() === "") {
-                    htmlContent += "<br>";
-                } else {
-                    htmlContent += `<p>${escapeHtml(line)}</p>`;
-                }
+                paragraphBuffer.push(escapeHtml(line.trim()));
             }
         }
     }
-    if (inCodeBlock) htmlContent += '</code></pre>'; // Close if unclosed
-    if (inList) htmlContent += '</ul>'; // Close if unclosed
+    flushParagraph(); 
+    if (inList) htmlContent += '</ul>'; 
     
-    return htmlContent;
+    return html;
 }
 
 function connect(){const e=location.protocol==="https:"?"wss:":"ws:",t=e+"//"+location.host+"/ws/openapi_agent";addChatMessage("Connecting to: "+t,"info"),ws=new WebSocket(t),ws.onopen=()=>{addChatMessage("WebSocket connected.","info"),showThinking(!1)},ws.onmessage=e=>{const t=JSON.parse(e.data);let o=t.content;const type = t.type || "agent"; if("graph_update"===t.type)return graphJsonView.textContent=JSON.stringify(o,null,2),addChatMessage("Execution graph has been updated.","info"),void console.log("Graph Update Received:",o);if("status"===t.type&&o&&o.toLowerCase().includes("processing"))showThinking(!0);else if("final"===t.type||"error"===t.type||"info"===t.type||"warning"===t.type)showThinking(!1);else"intermediate"===t.type&&o&&o.toLowerCase().includes("processing"); o = formatMessageContent(o, type); addChatMessage(`Agent (${type}): ${o}`,type)},ws.onerror=e=>{addChatMessage("WebSocket error. Check console. If page HTTPS, WS must be WSS.","error"),console.error("WebSocket error object:",e),showThinking(!1)},ws.onclose=e=>{let t="";e.code&&(t+=`Code: ${e.code} `),e.reason&&(t+=`Reason: ${e.reason} `),t+=e.wasClean?"(Clean close) ":"(Unclean close) ",addChatMessage("WebSocket disconnected. "+t+"Attempting to reconnect in 5s...","info"),console.log("WebSocket close event:",e),showThinking(!1),setTimeout(connect,5e3)}}
