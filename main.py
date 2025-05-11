@@ -253,12 +253,20 @@ async def websocket_endpoint(websocket: WebSocket):
                         current_bot_state_obj.workflow_execution_status = "failed"
                     else:
                         try:
+                            # wf_executor = WorkflowExecutor(
+                            #     workflow_definition=current_bot_state_obj.execution_graph,
+                            #     api_executor_instance=api_executor_instance,
+                            #     websocket_callback=None, # Will be set by adapter
+                            #     session_id=session_id,
+                            #     initial_extracted_data=current_bot_state_obj.workflow_extracted_data.copy()
+                            # )
+                            # In main.py, around line 263
                             wf_executor = WorkflowExecutor(
                                 workflow_definition=current_bot_state_obj.execution_graph,
-                                api_executor_instance=api_executor_instance,
+                                # api_executor_instance=api_executor_instance, # REMOVE THIS LINE
                                 websocket_callback=None, # Will be set by adapter
                                 session_id=session_id,
-                                initial_extracted_data=current_bot_state_obj.workflow_extracted_data.copy()
+                                # initial_extracted_data=current_bot_state_obj.workflow_extracted_data.copy() # REMOVE THIS LINE
                             )
                             active_workflow_executors[session_id] = wf_executor
 
