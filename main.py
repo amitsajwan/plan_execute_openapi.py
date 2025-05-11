@@ -98,7 +98,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.debug(f"[{session_id}] No checkpoint. New state.")
                 initial_state_for_turn = BotState(session_id=session_id, user_input=user_input)
 
-            current_turn_final_state: Optional[BotState] = None 
+            current_turn_final_state_obj: Optional[BotState] = None 
             
             if initial_state_for_turn.scratchpad:
                  initial_state_for_turn.scratchpad.pop('graph_to_send', None)
@@ -106,68 +106,79 @@ async def websocket_endpoint(websocket: WebSocket):
             try:
                 if langgraph_app is None: raise RuntimeError("Agent not available.")
                 
-                # This will store the BotState object from the last relevant event
-                last_processed_state_obj: Optional[BotState] = None
-
                 async for stream_event in langgraph_app.astream_events(initial_state_for_turn, config=config, version="v1"): 
-                    event_type, event_data, event_name = stream_event["event"], stream_event["data"], stream_event.get("name", "unknown_node")
+                    event_type = stream_event["event"]
+                    event_data = stream_event["data"]
+                    event_name = stream_event.get("name", "unknown_node") # Name of the node that produced the event
                     
-                    if event_type in ("on_chain_end", "on_tool_end"): # These events usually contain the full state output of the node
-                        node_output_dict = event_data.get("output") 
+                    # logger.debug(f"[{session_id}] Event: {event_type}, Name: {event_name}, Data Keys: {list(event_data.keys()) if isinstance(event_data, dict) else 'N/A'}")
+
+                    # When a node (chain or tool in LangGraph terms) finishes, its output is in event_data["output"]
+                    # For StateGraph(BotState), this output should be the BotState instance itself.
+                    if event_type in ("on_chain_end", "on_tool_end"):
+                        node_output_value = event_data.get("output")
                         
-                        if isinstance(node_output_dict, dict) and "session_id" in node_output_dict: # Check if it's a flat BotState dict
+                        # Attempt to get a BotState instance from the node's output
+                        processed_node_state: Optional[BotState] = None
+                        if isinstance(node_output_value, BotState):
+                            processed_node_state = node_output_value
+                        elif isinstance(node_output_value, dict) and "session_id" in node_output_value: # If it's a dict representation
                             try:
-                                node_state = BotState.model_validate(node_output_dict)
-                                last_processed_state_obj = node_state # Update with the latest full state
-                                
-                                if node_state.response: 
-                                    logger.debug(f"[{session_id}] Node '{event_name}' intermediate: {node_state.response[:100]}...")
-                                    await websocket.send_json({"type": "intermediate", "content": node_state.response})
+                                processed_node_state = BotState.model_validate(node_output_value)
+                            except ValidationError as e_val:
+                                logger.error(f"[{session_id}] Pydantic validation error for node '{event_name}' output dict: {e_val}. Data: {str(node_output_value)[:200]}", exc_info=False)
+                        else:
+                            logger.warning(f"[{session_id}] Node '{event_name}' output was not a BotState instance or expected dict. Type: {type(node_output_value)}, Content: {str(node_output_value)[:200]}")
 
-                                graph_json_to_send = node_state.scratchpad.pop('graph_to_send', None)
-                                if graph_json_to_send:
-                                    logger.info(f"[{session_id}] Sending graph_update from node '{event_name}'.")
-                                    await websocket.send_json({"type": "graph_update", "content": json.loads(graph_json_to_send)}) 
-                            except ValidationError as e_val: 
-                                logger.error(f"[{session_id}] Pydantic state validation error for node '{event_name}': {e_val}. Data tried: {str(node_output_dict)[:300]}", exc_info=False)
-                            except Exception as e_proc: 
-                                logger.error(f"[{session_id}] Error processing output of node '{event_name}': {e_proc}. Data: {str(node_output_dict)[:300]}", exc_info=True)
-                        elif node_output_dict is not None: 
-                             logger.warning(f"[{session_id}] Node '{event_name}' output was not None and not a direct BotState dict. Type: {type(node_output_dict)}, Output: {str(node_output_dict)[:300]}")
+                        if processed_node_state:
+                            current_turn_final_state_obj = processed_node_state # Keep track of the latest full state
+
+                            # Send intermediate status message if present
+                            if processed_node_state.response:
+                                logger.info(f"[{session_id}] Sending INTERMEDIATE from '{event_name}': {processed_node_state.response[:100]}...")
+                                await websocket.send_json({"type": "intermediate", "content": processed_node_state.response})
+                                # It's generally better for the node itself or the responder to clear state.response
+                                # if it's only a transient status. Forcing clear here might be too soon.
+
+                            # Send graph update if present
+                            graph_json_to_send = processed_node_state.scratchpad.pop('graph_to_send', None)
+                            if graph_json_to_send:
+                                logger.info(f"[{session_id}] Sending GRAPH_UPDATE from node '{event_name}'.")
+                                try:
+                                    await websocket.send_json({"type": "graph_update", "content": json.loads(graph_json_to_send)})
+                                except json.JSONDecodeError:
+                                    logger.error(f"[{session_id}] Failed to parse graph_json_to_send before sending graph_update.")
+                                    await websocket.send_json({"type": "error", "content": "Internal error: Could not send graph update due to format issue."})
                 
-                # After the stream, current_turn_final_state should be the state after the responder has run.
-                # We use the last_processed_state_obj which should be the state from the 'responder' node.
-                current_turn_final_state = last_processed_state_obj
+                # After the stream is fully processed, current_turn_final_state_obj holds the state from the last executed node (likely 'responder')
+                logger.info(f"[{session_id}] Stream finished. current_turn_final_state_obj available: {current_turn_final_state_obj is not None}")
+                if current_turn_final_state_obj: 
+                    logger.info(f"[{session_id}] Final state final_response: '{current_turn_final_state_obj.final_response}'")
+                    logger.info(f"[{session_id}] Final state response (should be None): '{current_turn_final_state_obj.response}'")
 
-                logger.info(f"[{session_id}] Stream finished. current_turn_final_state available: {current_turn_final_state is not None}")
-                if current_turn_final_state: 
-                    logger.info(f"[{session_id}] current_turn_final_state.final_response: '{current_turn_final_state.final_response}'")
-                    logger.info(f"[{session_id}] current_turn_final_state.response (after responder): '{current_turn_final_state.response}'") # Should be None
-
-                if current_turn_final_state and current_turn_final_state.final_response:
-                    logger.info(f"[{session_id}] Sending final: {current_turn_final_state.final_response[:100]}...")
-                    await websocket.send_json({"type": "final", "content": current_turn_final_state.final_response})
+                if current_turn_final_state_obj and current_turn_final_state_obj.final_response:
+                    logger.info(f"[{session_id}] Sending FINAL: {current_turn_final_state_obj.final_response[:100]}...")
+                    await websocket.send_json({"type": "final", "content": current_turn_final_state_obj.final_response})
                 else: 
                     fallback_msg = "Processing complete, but no specific message was generated by the agent."
-                    # Check initial_state_for_turn.response if current_turn_final_state is None or has no response
-                    # This can happen if an error occurred very early, before any node properly set the state.
-                    if initial_state_for_turn.response and not (current_turn_final_state and current_turn_final_state.final_response):
-                        fallback_msg = initial_state_for_turn.response
-                        logger.warning(f"[{session_id}] No final_response from graph, using response from initial state for turn: {fallback_msg[:100]}...")
-                    elif current_turn_final_state and current_turn_final_state.response : # Should be None after responder
-                        fallback_msg = current_turn_final_state.response 
+                    if current_turn_final_state_obj and current_turn_final_state_obj.response: 
+                        # This case means responder might not have run or cleared state.response
+                        fallback_msg = current_turn_final_state_obj.response 
                         logger.warning(f"[{session_id}] No final_response, using last intermediate response from snapshot: {fallback_msg[:100]}...")
+                    elif initial_state_for_turn.response: # If an error was set very early
+                        fallback_msg = initial_state_for_turn.response
+                        logger.warning(f"[{session_id}] No final_response, using response from initial state for turn: {fallback_msg[:100]}...")
                     else:
                         logger.error(f"[{session_id}] No final_response or any response in final/initial state snapshot for user.")
                     await websocket.send_json({"type": "error", "content": fallback_msg})
 
             except Exception as e_graph:
-                logger.critical(f"[{session_id}] LangGraph error: {e_graph}", exc_info=True)
-                await websocket.send_json({"type": "error", "content": f"Error: {str(e_graph)[:200]}"})
+                logger.critical(f"[{session_id}] LangGraph execution error: {e_graph}", exc_info=True)
+                await websocket.send_json({"type": "error", "content": f"Error during agent processing: {str(e_graph)[:200]}"})
     except WebSocketDisconnect: logger.info(f"WS disconnected: {session_id}")
     except Exception as e_outer:
         logger.critical(f"[{session_id}] WS handler error: {e_outer}", exc_info=True)
-        try: await websocket.send_json({"type": "error", "content": f"Server error: {str(e_outer)[:200]}"})
+        try: await websocket.send_json({"type": "error", "content": f"Critical server error: {str(e_outer)[:200]}"})
         except: pass
     finally:
         logger.info(f"[{session_id}] Closing WS connection.")
