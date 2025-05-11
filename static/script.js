@@ -13,7 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const graphDagViewContent = document.getElementById('graphDagViewContent');
 
     // New DOM Elements for Workflow Interaction
-    const runWorkflowButton = document.getElementById('runWorkflowButton'); // Will be null if not added to HTML
+    const runWorkflowButton = document.getElementById('runWorkflowButton');
     const workflowConfirmationModal = document.getElementById('workflowConfirmationModal');
     const modalTitle = document.getElementById('modalTitle');
     const modalOperationId = document.getElementById('modalOperationId');
@@ -22,27 +22,32 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalPath = document.getElementById('modalPath');
     const modalPayload = document.getElementById('modalPayload');
     const modalConfirmButton = document.getElementById('modalConfirmButton');
-    const modalCancelButton = document.getElementById('modalCancelButton'); // Assuming you add this button
-    const workflowLogMessagesDiv = document.getElementById('workflowLogMessages'); // Optional dedicated log
+    const modalCancelButton = document.getElementById('modalCancelButton');
+    const workflowLogMessagesDiv = document.getElementById('workflowLogMessages');
 
     let ws;
     let currentGraphData = null;
-    let currentWorkflowInterruptionData = null; // To store data for the current interruption
+    let currentWorkflowInterruptionData = null;
 
     function showThinking(show) {
         thinkingIndicator.style.display = show ? 'inline-block' : 'none';
         if (sendButton) sendButton.disabled = show;
         if (messageInput) messageInput.disabled = show;
-        if (runWorkflowButton) runWorkflowButton.disabled = show; // Disable run workflow button too
+        if (runWorkflowButton) runWorkflowButton.disabled = show;
     }
 
     function escapeHtml(unsafe) {
         if (typeof unsafe !== 'string') {
-            try {
-                return JSON.stringify(unsafe, null, 2);
-            } catch (e) {
-                return String(unsafe);
+            // This case should ideally be handled before calling escapeHtml if special formatting is needed.
+            // For safety, stringify if it's an object, otherwise convert to string.
+            if (typeof unsafe === 'object' && unsafe !== null) {
+                try {
+                    return JSON.stringify(unsafe); // Simple stringify, no pretty print here
+                } catch (e) {
+                    return String(unsafe);
+                }
             }
+            return String(unsafe);
         }
         return unsafe
             .replace(/&/g, "&amp;")
@@ -53,34 +58,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function formatMessageContent(contentStr, type) {
-        // Allow direct HTML for workflow messages if they are carefully constructed server-side
-        // or use specific formatting for them. For now, keep existing logic.
-        if (type.startsWith("workflow_")) { // Basic handling for workflow messages
-            if (typeof contentStr === 'object') {
-                return '<pre>' + escapeHtml(JSON.stringify(contentStr, null, 2)) + '</pre>';
-            }
-            return escapeHtml(contentStr); // Default to escaping for safety
-        }
-
-        // Existing formatting logic for agent messages
+        // This function now primarily formats the core content.
+        // Prefixes like "Info:", "Error:" will be handled by addChatMessage.
         if (typeof contentStr !== 'string') {
+            // If content is an object, pretty-print JSON within <pre> tags.
             return '<pre>' + escapeHtml(JSON.stringify(contentStr, null, 2)) + '</pre>';
         }
-        if (type !== 'agent' && type !== 'final' && type !== 'intermediate' && type !== 'error' && type !== 'info' && type !== 'warning' && type !== 'status') {
-             // If it's not a known agent message type, escape it simply.
-             // This is a fallback, ideally all messages have a clear type.
-            return escapeHtml(contentStr);
-        }
 
+        // Markdown-like formatting for strings (headings, lists, code blocks)
         let html = '';
         const codeBlockPlaceholders = [];
+        // Regex for fenced code blocks
         let processedContentStr = contentStr.replace(/```(\w*)\n([\s\S]*?)\n```/g, (match, lang, code) => {
             const placeholder = `__CODEBLOCK_${codeBlockPlaceholders.length}__`;
             const langClass = lang ? `language-${escapeHtml(lang)}` : 'language-plaintext';
             codeBlockPlaceholders.push(`<pre><code class="${langClass}">${escapeHtml(code)}</code></pre>`);
             return placeholder;
         });
-        processedContentStr = processedContentStr.replace(/```\n([\s\S]*?)\n```/g, (match, code) => {
+         processedContentStr = processedContentStr.replace(/```\n([\s\S]*?)\n```/g, (match, code) => { // For code blocks without lang
             const placeholder = `__CODEBLOCK_${codeBlockPlaceholders.length}__`;
             codeBlockPlaceholders.push(`<pre><code>${escapeHtml(code)}</code></pre>`);
             return placeholder;
@@ -117,7 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const placeholderIndex = parseInt(line.substring("__CODEBLOCK_".length, line.lastIndexOf("__")));
                 if (placeholderIndex >= 0 && placeholderIndex < codeBlockPlaceholders.length) {
                     html += codeBlockPlaceholders[placeholderIndex];
-                } else {
+                } else { // Fallback if placeholder is malformed
                     html += `<p>${escapeHtml(line)}</p>`;
                 }
             } else {
@@ -133,37 +128,41 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         flushParagraph();
         if (inList) html += '</ul>';
-        return html || "<p>" + escapeHtml(contentStr) + "</p>";
+        return html || "<p>" + escapeHtml(contentStr) + "</p>"; // Fallback if all lines were e.g. placeholders
     }
 
-    function addChatMessage(messageContent, type, isRawHtml = false) {
+    // MODIFIED addChatMessage to accept a prefix
+    function addChatMessage(prefix, mainContent, type) {
         const messageElement = document.createElement('div');
-        if (isRawHtml) {
-            messageElement.innerHTML = messageContent; // Use if content is already safe HTML
+        
+        const formattedMainContent = formatMessageContent(mainContent, type);
+        let fullMessageHtml;
+
+        if (prefix) {
+            fullMessageHtml = `${escapeHtml(prefix)}: ${formattedMainContent}`;
         } else {
-            messageElement.innerHTML = formatMessageContent(messageContent, type);
+            fullMessageHtml = formattedMainContent;
         }
-        messageElement.className = 'message ' + type; // e.g., 'message agent', 'message workflow_info'
+        
+        messageElement.innerHTML = fullMessageHtml;
+        messageElement.className = 'message ' + type;
         messagesDiv.appendChild(messageElement);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
-
-    // Function to add messages to the dedicated workflow log (if it exists)
+    
     function addWorkflowLogMessage(logContent, type) {
         if (workflowLogMessagesDiv) {
             const logElement = document.createElement('div');
-            // Workflow logs might be more structured, consider specific formatting
             if (typeof logContent === 'object') {
                 logElement.innerHTML = `<span class="log-timestamp">${new Date().toLocaleTimeString()}</span> <pre>${escapeHtml(JSON.stringify(logContent, null, 2))}</pre>`;
             } else {
                 logElement.innerHTML = `<span class="log-timestamp">${new Date().toLocaleTimeString()}</span> ${escapeHtml(logContent)}`;
             }
-            logElement.className = 'workflow-log-entry workflow-' + type; // e.g. workflow-node_started
+            logElement.className = 'workflow-log-entry workflow-' + type;
             workflowLogMessagesDiv.appendChild(logElement);
             workflowLogMessagesDiv.scrollTop = workflowLogMessagesDiv.scrollHeight;
         } else {
-            // Fallback to main chat if dedicated log area doesn't exist
-            addChatMessage(`WF Log (${type}): ${typeof logContent === 'object' ? JSON.stringify(logContent) : logContent}`, `workflow-${type}-fallback`);
+            addChatMessage("WF Log", `(${type}) ${typeof logContent === 'object' ? JSON.stringify(logContent) : logContent}`, `workflow-${type}-fallback`);
         }
     }
 
@@ -172,47 +171,42 @@ document.addEventListener('DOMContentLoaded', () => {
         if (ws && ws.readyState === WebSocket.OPEN) {
             const messageText = messageInput.value;
             if (messageText.trim() === "") return;
-            addChatMessage(`You: ${escapeHtml(messageText)}`, "user"); // Display user message
-            ws.send(messageText); // Send raw text to backend
+            addChatMessage("You", messageText, "user"); // Prefix "You", content is messageText
+            ws.send(messageText);
             messageInput.value = '';
             messageInput.style.height = 'auto';
             showThinking(true);
         } else {
-            addChatMessage("WebSocket is not connected. Cannot send message.", "error");
+            addChatMessage("System", "WebSocket is not connected. Cannot send message.", "error");
         }
     }
 
     window.runWorkflow = function() {
         if (ws && ws.readyState === WebSocket.OPEN) {
-            const commandText = "run current workflow"; // Specific command for the backend router
-            addChatMessage(`You: ${escapeHtml(commandText)}`, "user");
+            const commandText = "run current workflow";
+            addChatMessage("You", commandText, "user");
             ws.send(commandText);
             showThinking(true);
             addWorkflowLogMessage("Attempting to start workflow...", "info");
         } else {
-            addChatMessage("WebSocket is not connected. Cannot run workflow.", "error");
+            addChatMessage("System", "WebSocket is not connected. Cannot run workflow.", "error");
         }
     }
 
-    // --- Workflow Confirmation Modal Functions ---
     function showWorkflowConfirmationModal(data) {
-        if (!workflowConfirmationModal || !modalTitle) { // Check if modal elements exist
+        if (!workflowConfirmationModal || !modalTitle) {
             console.error("Workflow confirmation modal elements not found in HTML.");
-            addChatMessage("Error: UI for workflow confirmation is missing. Check console.", "error");
-            // Fallback: send an auto-deny or log error, as user cannot confirm.
-            // For now, just log and the workflow will likely stall or timeout on backend.
+            addChatMessage("System", "Error: UI for workflow confirmation is missing. Check console.", "error");
             return;
         }
-        currentWorkflowInterruptionData = data; // Store for sending confirmation
-
+        currentWorkflowInterruptionData = data;
         modalTitle.textContent = `Confirm API Call: ${data.operationId || 'N/A'}`;
         modalOperationId.textContent = data.operationId || 'N/A';
         modalNodeId.textContent = data.node_id || 'N/A';
         modalMethod.textContent = data.method || 'N/A';
         modalPath.textContent = data.calculated_path || data.path_template || 'N/A';
-        
         let payloadText = "";
-        if (data.calculated_payload) {
+        if (data.calculated_payload !== undefined && data.calculated_payload !== null) { // Check for undefined or null
             try {
                 payloadText = JSON.stringify(data.calculated_payload, null, 2);
             } catch (e) {
@@ -220,14 +214,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.error("Error stringifying payload for modal:", data.calculated_payload, e);
             }
         } else {
-            payloadText = "No request payload for this operation, or payload is not yet calculated.";
+            payloadText = "No request payload for this operation, or payload is not applicable/calculated.";
         }
         modalPayload.value = payloadText;
-        
         workflowConfirmationModal.style.display = 'flex';
     }
 
-    window.hideWorkflowConfirmationModal = function() { // Make it globally accessible if needed
+    window.hideWorkflowConfirmationModal = function() {
         if (workflowConfirmationModal) workflowConfirmationModal.style.display = 'none';
         currentWorkflowInterruptionData = null;
     }
@@ -235,55 +228,56 @@ document.addEventListener('DOMContentLoaded', () => {
     if (modalConfirmButton) {
         modalConfirmButton.onclick = () => {
             if (!currentWorkflowInterruptionData) {
-                addChatMessage("Error: No interruption data to confirm.", "error");
+                addChatMessage("System", "Error: No interruption data to confirm.", "error");
                 hideWorkflowConfirmationModal();
                 return;
             }
             let confirmedPayloadStr = modalPayload.value;
             let confirmedPayloadJson;
             try {
-                confirmedPayloadJson = JSON.parse(confirmedPayloadStr);
+                // Allow empty string for no payload, or parse JSON
+                if (confirmedPayloadStr.trim() === "") {
+                    confirmedPayloadJson = null; // Or an empty object {} if your backend expects that for no payload
+                } else {
+                    confirmedPayloadJson = JSON.parse(confirmedPayloadStr);
+                }
             } catch (e) {
-                addChatMessage("Error: Confirmed payload is not valid JSON. Please correct it.", "error-modal"); // You might need a specific class for modal errors
-                alert("Payload is not valid JSON. Please correct it."); // Simple alert for now
+                addChatMessage("System", "Error: Confirmed payload is not valid JSON. Please correct it or leave empty if no payload.", "error-modal");
+                alert("Payload is not valid JSON. Please correct it or leave empty if no payload.");
                 return;
             }
 
-            // Send message to backend to resume workflow
-            // The backend's interactive_query_planner needs to parse this text.
             const resumeMessage = `User confirms payload for node ${currentWorkflowInterruptionData.node_id}: ${JSON.stringify(confirmedPayloadJson)}`;
-            addChatMessage(`You: ${escapeHtml(resumeMessage)}`, "user");
-            ws.send(resumeMessage);
+            addChatMessage("You", resumeMessage, "user"); // Send as "You"
+            ws.send(resumeMessage); // Send the full string for backend parsing
             
             addWorkflowLogMessage(`Payload confirmed for node ${currentWorkflowInterruptionData.node_id}. Resuming...`, "info");
             hideWorkflowConfirmationModal();
-            showThinking(true); // Show thinking while backend processes resume
+            showThinking(true);
         };
     }
-     if (modalCancelButton) { // Assuming you have a cancel button with id="modalCancelButton"
+     if (modalCancelButton) {
         modalCancelButton.onclick = () => {
             if (currentWorkflowInterruptionData) {
-                // Inform backend about cancellation if necessary, or just close UI
-                // For now, just closes UI. Backend will timeout if it expects a response.
                 addWorkflowLogMessage(`Confirmation cancelled by user for node ${currentWorkflowInterruptionData.node_id}.`, "warning");
+                 // Optionally, send a "cancel" message to the backend here if workflows can be explicitly cancelled.
+                // ws.send(`User cancelled confirmation for node ${currentWorkflowInterruptionData.node_id}`);
             }
             hideWorkflowConfirmationModal();
         };
     }
 
-
-    // --- Mermaid Graph Functions ---
     function generateMermaidDefinition(graphData) {
+        // ... (no changes to this function) ...
         if (!graphData || !graphData.nodes || !graphData.edges) {
             return "graph TD\\n    error[\"Invalid graph data for Mermaid\"];";
         }
         let mermaidDef = "graph TD;\n";
         mermaidDef += "    classDef startEnd fill:#555,stroke:#333,stroke-width:2px,color:#fff,font-weight:bold,rx:5,ry:5;\n";
         mermaidDef += "    classDef apiNode fill:#4A90E2,stroke:#2c5282,stroke-width:2px,color:#fff,rx:5,ry:5;\n";
-        mermaidDef += "    classDef runningNode fill:#f6ad55,stroke:#dd6b20,stroke-width:3px,color:#000,font-weight:bold,rx:5,ry:5; \n"; // For running nodes
-        mermaidDef += "    classDef successNode fill:#48bb78,stroke:#2f855a,stroke-width:2px,color:#fff,rx:5,ry:5; \n"; // For success nodes
-        mermaidDef += "    classDef errorNode fill:#f56565,stroke:#c53030,stroke-width:2px,color:#fff,rx:5,ry:5; \n";   // For error nodes
-
+        mermaidDef += "    classDef runningNode fill:#f6ad55,stroke:#dd6b20,stroke-width:3px,color:#000,font-weight:bold,rx:5,ry:5; \n";
+        mermaidDef += "    classDef successNode fill:#48bb78,stroke:#2f855a,stroke-width:2px,color:#fff,rx:5,ry:5; \n";
+        mermaidDef += "    classDef errorNode fill:#f56565,stroke:#c53030,stroke-width:2px,color:#fff,rx:5,ry:5; \n";
 
         const sanitizeNodeId = (id) => id.replace(/[^a-zA-Z0-9_]/g, '_');
 
@@ -302,7 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (node.operationId === "START_NODE" || node.operationId === "END_NODE") {
                  mermaidDef += `    class ${nodeId} startEnd;\n`;
             } else {
-                mermaidDef += `    class ${nodeId} apiNode;\n`; // Default class
+                mermaidDef += `    class ${nodeId} apiNode;\n`;
             }
         });
 
@@ -316,6 +310,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function renderMermaidGraph(definition) {
+        // ... (no changes to this function) ...
         if (!definition || typeof mermaid === 'undefined') {
             mermaidDagContainer.innerHTML = "Mermaid library not loaded or definition is empty.";
             return;
@@ -324,41 +319,36 @@ document.addEventListener('DOMContentLoaded', () => {
             mermaidDagContainer.innerHTML = ""; 
             const isDagViewActive = graphDagViewContent.classList.contains('active');
             if (!isDagViewActive) {
-                graphDagViewContent.style.display = 'block'; // Temporarily show for rendering
+                graphDagViewContent.style.display = 'block';
             }
 
             const { svg } = await mermaid.render('mermaid-graph-svg-' + Date.now(), definition);
             mermaidDagContainer.innerHTML = svg;
             
             if (!isDagViewActive) {
-                graphDagViewContent.style.display = 'none'; // Hide again if it wasn't active
+                graphDagViewContent.style.display = 'none';
             }
+
         } catch (error) {
             console.error("Mermaid rendering error:", error, "\nDefinition:", definition);
-            mermaidDagContainer.textContent = "Error rendering DAG. Check console.";
+            mermaidDagContainer.textContent = "Error rendering DAG. Check console for details and definition.";
         }
     }
     
-    // Function to update node class in Mermaid graph (e.g., for highlighting)
-    // Note: Directly manipulating Mermaid's generated SVG can be fragile.
-    // A better way might be to re-render with updated class definitions if Mermaid supports it easily,
-    // or use Mermaid's API if it allows dynamic class changes.
-    // For simplicity, this example might re-render or just log.
-    function updateMermaidNodeStatus(nodeId, statusClass) { // statusClass e.g., 'runningNode', 'successNode', 'errorNode'
+    function updateMermaidNodeStatus(nodeId, statusClass) {
+        // ... (no changes to this function, assuming it works by re-rendering) ...
         if (!currentGraphData || !mermaidDagContainer.querySelector('svg')) {
             console.warn("Cannot update Mermaid node status: No graph data or SVG not rendered.");
             return;
         }
         const sanitizedNodeId = nodeId.replace(/[^a-zA-Z0-9_]/g, '_');
-        // This is a simplified approach: Re-render the graph with the new class for the node.
-        // Find the node in currentGraphData and add a temporary 'statusClass' property
         let nodeFound = false;
         currentGraphData.nodes.forEach(node => {
             if ((node.display_name || node.operationId) === nodeId) {
-                node._tempStatusClass = statusClass; // Add a temporary property
+                node._tempStatusClass = statusClass;
                 nodeFound = true;
             } else {
-                delete node._tempStatusClass; // Remove from others
+                delete node._tempStatusClass;
             }
         });
 
@@ -399,8 +389,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-
     window.showGraphTab = function(tabName) {
+        // ... (no changes to this function) ...
         graphJsonViewContent.classList.remove('active');
         graphDagViewContent.classList.remove('active');
         if (jsonTabButton) jsonTabButton.classList.remove('active');
@@ -424,68 +414,76 @@ document.addEventListener('DOMContentLoaded', () => {
     function connect() {
         const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl = wsProtocol + "//" + location.host + "/ws/openapi_agent";
-        addChatMessage("System: Connecting to " + wsUrl, "info");
+        addChatMessage("System", "Connecting to " + wsUrl, "info"); // Use new addChatMessage
         ws = new WebSocket(wsUrl);
 
-        ws.onopen = () => { addChatMessage("System: WebSocket connected.", "info"); showThinking(false); };
+        ws.onopen = () => { addChatMessage("System", "WebSocket connected.", "info"); showThinking(false); };
 
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
             let content = data.content;
-            const type = data.type || "agent"; // Default type if not specified
+            const type = data.type || "agent";
 
-            // Stop thinking indicator for most final messages from agent or workflow
             if (type === "final" || type === "error" || type.startsWith("workflow_execution_")) {
                 showThinking(false);
             }
-            if (type === "status" && content && content.toLowerCase().includes("processing")) {
+            if (type === "status" && content && typeof content === 'string' && content.toLowerCase().includes("processing")) {
                  showThinking(true);
             }
-
 
             if (type === "graph_update") {
                 currentGraphData = content;
                 if (graphJsonViewPre) graphJsonViewPre.textContent = JSON.stringify(content, null, 2);
-                addChatMessage("System: Execution graph has been updated.", "info");
-                if (graphDagViewContent.classList.contains('active')) { // If DAG view is active, re-render
+                addChatMessage("System", "Execution graph has been updated.", "info");
+                if (graphDagViewContent.classList.contains('active')) {
                     const mermaidDef = generateMermaidDefinition(currentGraphData);
                     renderMermaidGraph(mermaidDef);
                 }
-                return; // Handled graph update
+                return;
             }
 
-            // Handle workflow-specific messages
             if (type.startsWith("workflow_")) {
                 const workflowEventType = type.substring("workflow_".length);
-                addWorkflowLogMessage(content, workflowEventType); // Log to dedicated area or main chat
+                addWorkflowLogMessage(content, workflowEventType);
 
                 if (workflowEventType === "interrupt_confirmation_required") {
-                    showWorkflowConfirmationModal(content); // `content` should be the interruption data
-                    showThinking(false); // Stop thinking as we are waiting for user
+                    showWorkflowConfirmationModal(content);
+                    showThinking(false);
                 } else if (workflowEventType === "node_execution_started") {
-                    addChatMessage(`Workflow: Executing node '${content.node_id || content.operationId}'...`, "workflow-info");
+                    addChatMessage("Workflow", `Executing node '${content.node_id || content.operationId}'...`, "workflow-info");
                     if (content.node_id) updateMermaidNodeStatus(content.node_id, 'runningNode');
                 } else if (workflowEventType === "node_execution_succeeded") {
-                     addChatMessage(`Workflow: Node '${content.node_id}' succeeded. ${content.result_preview ? 'Result: ' + escapeHtml(content.result_preview) : ''}`, "workflow-success");
+                     addChatMessage("Workflow", `Node '${content.node_id}' succeeded. ${content.result_preview ? 'Result: ' + escapeHtml(content.result_preview) : ''}`, "workflow-success");
                     if (content.node_id) updateMermaidNodeStatus(content.node_id, 'successNode');
                 } else if (workflowEventType === "node_execution_failed") {
-                     addChatMessage(`Workflow: Node '${content.node_id}' failed. Error: ${escapeHtml(JSON.stringify(content.error))}`, "workflow-error");
+                     addChatMessage("Workflow", `Node '${content.node_id}' failed. Error: ${escapeHtml(JSON.stringify(content.error))}`, "workflow-error");
                     if (content.node_id) updateMermaidNodeStatus(content.node_id, 'errorNode');
                 } else if (workflowEventType === "execution_completed") {
-                    addChatMessage("Workflow: Execution completed.", "workflow-info");
+                    addChatMessage("Workflow", "Execution completed.", "workflow-info");
                 } else if (workflowEventType === "execution_failed") {
-                    addChatMessage(`Workflow: Execution failed. Reason: ${escapeHtml(JSON.stringify(content.error || content))}`, "workflow-error");
+                    addChatMessage("Workflow", `Execution failed. Reason: ${escapeHtml(JSON.stringify(content.error || content))}`, "workflow-error");
                 }
-                // Other workflow event types can be handled here as needed
-            } else {
-                // Handle regular agent messages
-                const messagePrefix = type.charAt(0).toUpperCase() + type.slice(1);
-                addChatMessage(`${messagePrefix}: ${formatMessageContent(content, type)}`, type);
+            } else if (type === "user") { // Should be handled by sendMessage, but as a safeguard
+                 addChatMessage("You", content, "user");
+            } else { // Handle regular agent/system messages (info, error, final, etc.)
+                let messagePrefix = type.charAt(0).toUpperCase() + type.slice(1);
+                let displayContent = content;
+
+                if (type === "info" && typeof content === 'object' && content !== null) {
+                    displayContent = content.message || JSON.stringify(content); // Prioritize .message
+                    if (content.session_id && content.message) { // Add session_id only if .message was present
+                         displayContent += ` (Session: ${content.session_id})`;
+                    }
+                }
+                // For all non-workflow messages, 'displayContent' is now the core content (either original string or extracted/stringified object)
+                // 'formatMessageContent' will then format this core content.
+                // The prefix is added by addChatMessage.
+                addChatMessage(messagePrefix, displayContent, type);
             }
         };
 
         ws.onerror = (error) => {
-            addChatMessage("System: WebSocket error. Check console. (If page is HTTPS, WS must be WSS).", "error");
+            addChatMessage("System", "WebSocket error. Check console. (If page is HTTPS, WS must be WSS).", "error");
             console.error("WebSocket error object:", error);
             showThinking(false);
         };
@@ -494,7 +492,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (event.code) reason += `Code: ${event.code} `;
             if (event.reason) reason += `Reason: ${event.reason} `;
             if (event.wasClean) reason += `(Clean close) `; else reason += `(Unclean close) `;
-            addChatMessage("System: WebSocket disconnected. " + reason + "Attempting to reconnect in 5s...", "info");
+            addChatMessage("System", "WebSocket disconnected. " + reason + "Attempting to reconnect in 5s...", "info");
             console.log("WebSocket close event:", event);
             showThinking(false);
             setTimeout(connect, 5000);
@@ -513,7 +511,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // Attach event listener for the "Run Workflow" button if it exists
     if (runWorkflowButton) {
         runWorkflowButton.onclick = runWorkflow;
     } else {
@@ -523,6 +520,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (jsonTabButton) jsonTabButton.onclick = () => showGraphTab('json');
     if (dagTabButton) dagTabButton.onclick = () => showGraphTab('dag');
     
-    showGraphTab('json'); // Initialize with JSON tab active
-    connect(); // Establish WebSocket connection
+    showGraphTab('json');
+    connect();
 });
