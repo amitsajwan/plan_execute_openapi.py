@@ -4,7 +4,7 @@ import uuid
 import json
 import os
 import sys
-from typing import Any, Dict, Optional, Tuple 
+from typing import Any, Dict, Optional, Tuple, List # Added List 
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse 
@@ -37,34 +37,62 @@ class PlaceholderLLM:
         logger.warning(f"Initialized {self.name}. This is a fallback if real LLMs fail.")
 
     def _generate_simulated_response(self, prompt_str: str) -> str:
-        if "Summarize this OpenAPI specification" in prompt_str:
+        prompt_lower = prompt_str.lower() # For case-insensitive checks
+
+        if "summarize this openapi specification" in prompt_lower:
             return "This is a simulated API summary from PlaceholderLLM."
-        if "design an API execution graph" in prompt_str.lower():
-            if "Cannot generate graph: No APIs identified." in prompt_str: 
-                 return json.dumps({ "nodes": [], "edges": [], "description": "Placeholder: Cannot generate graph, no APIs."})
-            return json.dumps({
-                "nodes": [{"operationId": "createItem", "summary": "Create an item", "description":"Initial step", "payload_description":"Req: name. Resp: id", "input_mappings":[]}],
-                "edges": [], "description": "Simulated graph from PlaceholderLLM: Create an item."})
-        if "Critique and refine" in prompt_str:
-             return json.dumps({
-                "nodes": [{"operationId": "createItem", "summary": "Create item (refined by Placeholder)", "payload_description":"Req: name. Resp: id", "input_mappings":[]}],
-                "edges": [], "description": "Refined graph by Placeholder.", "refinement_summary": "Placeholder refined details."})
-        if "Classify the user's intent" in prompt_str: 
-            if "focus on" in prompt_str.lower() or "what if" in prompt_str.lower(): return "interactive_query_planner"
+        
+        if "design an api execution graph" in prompt_lower or \
+           "critique and refine the following api execution graph" in prompt_lower:
+            
+            graph_data = {
+                "nodes": [], 
+                "edges": [], 
+                "description": "Placeholder graph: Default workflow.",
+                "refinement_summary": "Initial version by PlaceholderLLM."
+            }
+            # Add a simple valid node if not an error case for graph generation
+            if "design an api execution graph" in prompt_lower and \
+               "cannot generate graph: no apis identified" not in prompt_lower:
+                graph_data["nodes"].append(
+                    {"operationId": "placeholderOp1", "summary": "Placeholder Op 1", 
+                     "description":"First placeholder step", 
+                     "payload_description":"Req: data. Resp: result", "input_mappings":[]}
+                )
+            if "critique and refine" in prompt_lower:
+                 graph_data["description"] = "Refined placeholder graph."
+                 graph_data["refinement_summary"] = "Placeholder made some refinements."
+                 if not graph_data["nodes"]: # Ensure nodes list exists
+                     graph_data["nodes"].append(
+                         {"operationId": "placeholderOp1Refined", "summary": "Refined Placeholder Op 1", 
+                          "description":"Refined first step", 
+                          "payload_description":"Req: data. Resp: result", "input_mappings":[]}
+                     )
+            return json.dumps(graph_data)
+
+        if "classify the user's intent" in prompt_lower: 
+            if "focus on" in prompt_lower or "what if" in prompt_lower: return "interactive_query_planner"
             return "answer_openapi_query"
-        if "plans internal actions" in prompt_str: 
+        if "plans internal actions" in prompt_lower: 
             return json.dumps({
-                "user_query_understanding": "User wants info on 'createItem' (Placeholder).",
-                "interactive_action_plan": [{"action_name": "answer_query_directly", "action_params": {"query_for_synthesizer": "About createItem"}, "description":"Answer about createItem"}]})
-        if "Determine the user's high-level intent" in prompt_str:
-            if "graph" in prompt_str.lower(): return "describe_graph"
+                "user_query_understanding": "User wants info on 'someItem' (Placeholder).",
+                "interactive_action_plan": [{"action_name": "answer_query_directly", "action_params": {"query_for_synthesizer": "About someItem"}, "description":"Answer about someItem"}]})
+        if "determine the user's high-level intent" in prompt_lower: # Fallback router prompt
+            if "graph" in prompt_lower: return "describe_graph"
             return "answer_openapi_query"
-        return f"Simulated response from {self.name} for: {prompt_str[:50]}..."
+            
+        return f"Simulated response from {self.name} for prompt starting with: {prompt_str[:60]}..."
 
     def invoke(self, prompt: Any, **kwargs) -> Any:
-        prompt_str = str(prompt); logger.debug(f"{self.name} prompt: {prompt_str[:100]}...")
-        class ContentWrapper: def __init__(self, text): self.content = text
-        return ContentWrapper(self._generate_simulated_response(prompt_str))
+        prompt_str = str(prompt); 
+        # logger.debug(f"{self.name} received prompt (first 100 chars): {prompt_str[:100]}...")
+        response_text = self._generate_simulated_response(prompt_str)
+        # logger.debug(f"{self.name} generated response (first 100 chars): {response_text[:100]}...")
+        class ContentWrapper: 
+            def __init__(self, text): 
+                self.content = text
+        return ContentWrapper(response_text)
+
     async def ainvoke(self, prompt: Any, **kwargs) -> Any:
         import asyncio; await asyncio.sleep(self.delay); return self.invoke(prompt, **kwargs)
 
@@ -126,103 +154,96 @@ async def websocket_endpoint(websocket: WebSocket):
             user_input = await websocket.receive_text(); user_input = user_input.strip()
             logger.info(f"[{session_id}] RX: {user_input[:100]}...")
             if not user_input: await websocket.send_json({"type": "warning", "content": "Empty msg."}); continue
-            await websocket.send_json({"type": "status", "content": "Processing..."})
+            await websocket.send_json({"type": "status", "content": "Processing..."}) 
 
             config = {"configurable": {"thread_id": session_id}}
             current_checkpoint = checkpointer.get(config)
             initial_state_for_turn: BotState
             if current_checkpoint:
                 try:
-                    # Attempt to extract the state dictionary more robustly
-                    state_dict = current_checkpoint.get("channel_values", {}) 
-                    if not isinstance(state_dict, dict) or not state_dict : # If channel_values is empty or not a dict, try current_checkpoint itself
-                        state_dict = current_checkpoint if isinstance(current_checkpoint, dict) else {}
-                    
-                    # LangGraph with Pydantic state often nests it under "__root__" if not using Annotated state
-                    # Or it might be directly the fields if the StateGraph was defined with the Pydantic model directly
-                    # This part needs to be robust to how MemorySaver stores the Pydantic model's dict.
-                    if "__root__" in state_dict and isinstance(state_dict["__root__"], dict):
-                        state_dict_to_validate = state_dict["__root__"]
-                    elif "session_id" in state_dict: # Check if it's already a flat state dict
-                         state_dict_to_validate = state_dict
-                    else: # Could be nested under the last active node name if something went wrong
-                        # This is a less common case for the *input* to the graph run, but defensive.
-                        active_node_key = next(iter(state_dict), None) if state_dict else None
-                        if active_node_key and isinstance(state_dict.get(active_node_key), dict):
-                            state_dict_to_validate = state_dict.get(active_node_key, {})
-                            logger.warning(f"[{session_id}] Loaded state was nested under key '{active_node_key}'.")
-                        else:
-                            state_dict_to_validate = state_dict # Fallback to whatever state_dict is
-
-                    initial_state_for_turn = BotState.model_validate(state_dict_to_validate)
+                    state_values = current_checkpoint.get("channel_values", {})
+                    if not isinstance(state_values, dict) or not state_values:
+                        state_values = current_checkpoint if isinstance(current_checkpoint, dict) else {}
+                    dict_to_validate = {}
+                    if "session_id" in state_values: 
+                        dict_to_validate = state_values
+                    elif state_values: 
+                        first_key = next(iter(state_values), None)
+                        if first_key and isinstance(state_values[first_key], dict) and "session_id" in state_values[first_key]:
+                            dict_to_validate = state_values[first_key]
+                        elif "__root__" in state_values and isinstance(state_values["__root__"], dict):
+                             dict_to_validate = state_values["__root__"]
+                        else: 
+                            dict_to_validate = state_values 
+                    initial_state_for_turn = BotState.model_validate(dict_to_validate)
                     initial_state_for_turn.user_input = user_input
                     initial_state_for_turn.response = None; initial_state_for_turn.final_response = ""
                     initial_state_for_turn.next_step = None; initial_state_for_turn.intent = None
-                    logger.debug(f"[{session_id}] Loaded state from checkpoint: {initial_state_for_turn.session_id}")
+                    logger.debug(f"[{session_id}] Loaded state from checkpoint for session: {initial_state_for_turn.session_id}")
                 except (ValidationError, TypeError, AttributeError) as e:
-                    logger.warning(f"[{session_id}] Error loading state from checkpoint: {e}. Data: {str(current_checkpoint)[:300]}. Starting fresh.")
+                    logger.warning(f"[{session_id}] Error loading/validating state from checkpoint: {e}. Data: {str(current_checkpoint)[:300]}. Starting fresh.")
                     initial_state_for_turn = BotState(session_id=session_id, user_input=user_input)
             else: 
                 logger.debug(f"[{session_id}] No checkpoint. New state.")
                 initial_state_for_turn = BotState(session_id=session_id, user_input=user_input)
 
-            final_state_snapshot: Optional[BotState] = None
+            current_turn_final_state: Optional[BotState] = None # To store the state after the responder runs
+            
+            if initial_state_for_turn.scratchpad: # Clear graph_to_send at start of turn
+                 initial_state_for_turn.scratchpad.pop('graph_to_send', None)
+
             try:
                 if langgraph_app is None: raise RuntimeError("Agent not available.")
+                
                 async for stream_event in langgraph_app.astream_events(initial_state_for_turn, config=config, version="v1"): 
                     event_type, event_data, event_name = stream_event["event"], stream_event["data"], stream_event.get("name", "unknown_node")
-                    if event_type in ("on_chain_end", "on_tool_end"): # These events usually contain the full state output of the node
-                        output_val = event_data.get("output", event_data.get("outputs"))
-                        logger.debug(f"[{session_id}] Node '{event_name}' raw output_val type: {type(output_val)}, content: {str(output_val)[:300]}...")
-
-                        dict_to_validate = None
-                        if isinstance(output_val, dict):
-                            # For StateGraph(BotState), output_val should be the dictionary representation of BotState.
-                            if "session_id" in output_val: # Check if it's directly the state
-                                dict_to_validate = output_val
-                            # Check if nested under node name (less common for direct node output but defensive)
-                            elif event_name in output_val and isinstance(output_val[event_name], dict) and "session_id" in output_val[event_name]:
-                                dict_to_validate = output_val[event_name]
-                                logger.info(f"[{session_id}] Extracted state from output nested under node name '{event_name}'.")
-                            # Check if nested under "__root__" (common for Pydantic models in some LangGraph versions/setups)
-                            elif "__root__" in output_val and isinstance(output_val["__root__"], dict) and "session_id" in output_val["__root__"]:
-                                dict_to_validate = output_val["__root__"]
-                                logger.info(f"[{session_id}] Extracted state from output nested under '__root__'.")
-                            else:
-                                logger.warning(f"[{session_id}] Node '{event_name}' output dict structure not directly BotState or common nesting. Will attempt to validate directly. Output: {str(output_val)[:200]}")
-                                dict_to_validate = output_val # Attempt direct validation as last resort for dicts
+                    
+                    # The 'output' of on_chain_end/on_tool_end for a StateGraph node is the full state dict
+                    if event_type in ("on_chain_end", "on_tool_end"):
+                        node_output_dict = event_data.get("output") 
                         
-                        if dict_to_validate and isinstance(dict_to_validate, dict):
+                        if isinstance(node_output_dict, dict) and "session_id" in node_output_dict:
                             try:
-                                node_state = BotState.model_validate(dict_to_validate)
-                                final_state_snapshot = node_state 
-                                if node_state.response: 
-                                    logger.debug(f"[{session_id}] Node '{event_name}' intermediate: {node_state.response[:100]}...")
-                                    await websocket.send_json({"type": "intermediate", "content": node_state.response})
-                            except ValidationError as e_val: 
-                                logger.error(f"[{session_id}] Pydantic state validation error for node '{event_name}': {e_val}. Data tried: {str(dict_to_validate)[:300]}", exc_info=False)
-                            except Exception as e_proc: 
-                                logger.error(f"[{session_id}] Error processing output of node '{event_name}': {e_proc}. Data: {str(dict_to_validate)[:300]}", exc_info=True)
-                        elif output_val is not None : # If not a dict but not None
-                             logger.warning(f"[{session_id}] Node '{event_name}' output was not a dictionary. Type: {type(output_val)}, Output: {str(output_val)[:300]}")
-                
-                logger.info(f"[{session_id}] Stream finished. Snapshot valid: {final_state_snapshot is not None}")
-                if final_state_snapshot: logger.info(f"[{session_id}] Snapshot final_response: '{final_state_snapshot.final_response}' (responder should have set this)")
+                                current_node_state = BotState.model_validate(node_output_dict)
+                                # Update current_turn_final_state with the state from the latest completed node
+                                current_turn_final_state = current_node_state 
+                                
+                                if current_node_state.response: 
+                                    logger.debug(f"[{session_id}] Node '{event_name}' intermediate: {current_node_state.response[:100]}...")
+                                    await websocket.send_json({"type": "intermediate", "content": current_node_state.response})
+                                    # The node itself should manage clearing its 'response' if it's purely transient.
+                                    # Or, rely on responder to set final_response and clear response.
 
-                if final_state_snapshot and final_state_snapshot.final_response:
-                    logger.info(f"[{session_id}] Sending final: {final_state_snapshot.final_response[:100]}...")
-                    await websocket.send_json({"type": "final", "content": final_state_snapshot.final_response})
-                else: # Fallback if no final_response
-                    error_message_to_user = "Processing complete, but no specific message was generated by the agent."
-                    if final_state_snapshot and final_state_snapshot.response: # Should be None after responder
-                        error_message_to_user = final_state_snapshot.response 
-                        logger.warning(f"[{session_id}] No final_response, using last intermediate response from snapshot: {error_message_to_user[:100]}...")
-                    elif initial_state_for_turn.response: # If an error was set early and graph didn't run far
-                        error_message_to_user = initial_state_for_turn.response
-                        logger.warning(f"[{session_id}] No final_response, using response from initial state for turn: {error_message_to_user[:100]}...")
+                                graph_json_to_send = current_node_state.scratchpad.pop('graph_to_send', None)
+                                if graph_json_to_send:
+                                    logger.info(f"[{session_id}] Sending graph_update from node '{event_name}'.")
+                                    await websocket.send_json({"type": "graph_update", "content": json.loads(graph_json_to_send)}) 
+                            except ValidationError as e_val: 
+                                logger.error(f"[{session_id}] Pydantic state validation error for node '{event_name}': {e_val}. Data tried: {str(node_output_dict)[:300]}", exc_info=False)
+                            except Exception as e_proc: 
+                                logger.error(f"[{session_id}] Error processing output of node '{event_name}': {e_proc}. Data: {str(node_output_dict)[:300]}", exc_info=True)
+                        elif node_output_dict is not None: 
+                             logger.warning(f"[{session_id}] Node '{event_name}' output was not None and not a direct BotState dict. Type: {type(node_output_dict)}, Output: {str(node_output_dict)[:300]}")
+                
+                logger.info(f"[{session_id}] Stream finished. current_turn_final_state available: {current_turn_final_state is not None}")
+                if current_turn_final_state: 
+                    logger.info(f"[{session_id}] current_turn_final_state.final_response: '{current_turn_final_state.final_response}'")
+                    logger.info(f"[{session_id}] current_turn_final_state.response (after responder): '{current_turn_final_state.response}'")
+
+                if current_turn_final_state and current_turn_final_state.final_response:
+                    logger.info(f"[{session_id}] Sending final: {current_turn_final_state.final_response[:100]}...")
+                    await websocket.send_json({"type": "final", "content": current_turn_final_state.final_response})
+                else: 
+                    fallback_msg = "Processing complete, but no specific message was generated by the agent."
+                    if current_turn_final_state and current_turn_final_state.response: 
+                        fallback_msg = current_turn_final_state.response 
+                        logger.warning(f"[{session_id}] No final_response, using last intermediate response from snapshot: {fallback_msg[:100]}...")
+                    elif initial_state_for_turn.response: 
+                        fallback_msg = initial_state_for_turn.response
+                        logger.warning(f"[{session_id}] No final_response, using response from initial state for turn: {fallback_msg[:100]}...")
                     else:
                         logger.error(f"[{session_id}] No final_response or any response in final/initial state snapshot for user.")
-                    await websocket.send_json({"type": "error", "content": error_message_to_user})
+                    await websocket.send_json({"type": "error", "content": fallback_msg})
 
             except Exception as e_graph:
                 logger.critical(f"[{session_id}] LangGraph error: {e_graph}", exc_info=True)
@@ -240,14 +261,15 @@ async def websocket_endpoint(websocket: WebSocket):
 HTML_TEST_PAGE = """
 <!DOCTYPE html>
 <html>
-<head><title>OpenAPI Agent (Gemini)</title><style>body{font-family:sans-serif;margin:20px;background-color:#f4f4f4;color:#333}#messages{width:100%;max-width:800px;margin:20px auto;background-color:#fff;border-radius:8px;box-shadow:0 0 10px rgba(0,0,0,.1);padding:20px;height:400px;overflow-y:scroll;border:1px solid #ddd}.message{padding:8px;margin-bottom:8px;border-radius:4px}.user{background-color:#e1f5fe;text-align:right;margin-left:50px}.agent{background-color:#f0f0f0;margin-right:50px}.error{background-color:#ffcdd2;color:#c62828}.info{background-color:#c8e6c9;color:#2e7d32;font-style:italic}.status{background-color:#fff9c4;font-style:italic;text-align:center}#inputArea{display:flex;max-width:800px;margin:20px auto}textarea{flex-grow:1;padding:10px;border-radius:4px;border:1px solid #ccc;resize:vertical;min-height:80px}button{padding:10px 15px;margin-left:10px;border:none;background-color:#007bff;color:#fff;border-radius:4px;cursor:pointer}button:hover{background-color:#0056b3}pre{background-color:#282c34;color:#abb2bf;padding:1em;border-radius:4px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}</style></head>
-<body><h1>OpenAPI Agent Test (Gemini LLM)</h1><div id="messages"></div><div id="inputArea"><textarea id="messageInput" placeholder="Paste OpenAPI spec (JSON/YAML) or ask a question..."></textarea><button onclick="sendMessage()">Send</button></div>
+<head><title>OpenAPI Agent (Gemini)</title><style>body{font-family:sans-serif;margin:0;background-color:#f0f2f5;color:#333;display:flex;flex-direction:column;height:100vh}.header{background-color:#4A90E2;color:#fff;padding:15px 20px;text-align:center;font-size:1.2em;box-shadow:0 2px 4px rgba(0,0,0,.1)}.main-container{display:flex;flex-grow:1;overflow:hidden;padding:10px}.graph-view-container{width:35%;min-width:300px;background-color:#2d3748;color:#e2e8f0;padding:15px;margin-right:10px;border-radius:8px;display:flex;flex-direction:column;overflow-y:auto;font-family:'Courier New',Courier,monospace;font-size:.85em}.graph-view-container h2{margin-top:0;color:#90cdf4;border-bottom:1px solid #4a5568;padding-bottom:10px}#graphJsonView{flex-grow:1;white-space:pre-wrap;word-wrap:break-word;overflow-y:auto}#graphJsonView pre{margin:0;background-color:transparent!important;color:#e2e8f0!important;padding:0!important}.chat-container{display:flex;flex-direction:column;flex-grow:1;background-color:#fff;border-radius:8px;box-shadow:0 0 15px rgba(0,0,0,.1);overflow:hidden}#messages{flex-grow:1;padding:20px;overflow-y:scroll;border-bottom:1px solid #e0e0e0}.message{padding:10px 15px;margin-bottom:10px;border-radius:18px;max-width:75%;word-wrap:break-word;line-height:1.4}.user{background-color:#007bff;color:#fff;align-self:flex-end;margin-left:25%;border-bottom-right-radius:5px}.agent{background-color:#e9ecef;color:#495057;align-self:flex-start;margin-right:25%;border-bottom-left-radius:5px}.error{background-color:#ffebee;color:#c62828;border:1px solid #ef9a9a;padding:10px}.info{background-color:#e8f5e9;color:#2e7d32;font-style:italic;text-align:center;padding:6px;font-size:.9em;border-radius:8px}.status{background-color:#fffde7;color:#f57f17;font-style:italic;text-align:center;padding:6px;font-size:.9em;border-radius:8px}.intermediate{background-color:#e3f2fd;color:#1565c0;font-style:italic;font-size:.9em;margin-right:25%;align-self:flex-start;border-bottom-left-radius:5px}#inputArea{display:flex;padding:15px;border-top:1px solid #e0e0e0;background-color:#f8f9fa}textarea{flex-grow:1;padding:12px;border-radius:20px;border:1px solid #ced4da;resize:none;min-height:24px;max-height:100px;overflow-y:auto;font-size:1em;line-height:1.4}button{padding:12px 20px;margin-left:10px;border:none;background-color:#007bff;color:#fff;border-radius:20px;cursor:pointer;font-size:1em;display:flex;align-items:center;justify-content:center}button:hover{background-color:#0056b3}.thinking-indicator{width:20px;height:20px;border:3px solid rgba(0,123,255,.2);border-top-color:#007bff;border-radius:50%;animation:spin 1s linear infinite;display:none;margin-left:10px}@keyframes spin{to{transform:rotate(360deg)}}button span{margin-right:5px}pre{background-color:#282c34;color:#abb2bf;padding:1em;border-radius:4px;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word}</style></head>
+<body><div class=header>OpenAPI Multi-view Agent (Gemini LLM)</div><div class=main-container><div class=graph-view-container><h2>Execution Graph (JSON)</h2><div id=graphJsonView><pre>No graph loaded yet.</pre></div></div><div class=chat-container><div id=messages></div><div id=inputArea><textarea id=messageInput placeholder="Paste OpenAPI spec (JSON/YAML) or ask a question..."rows=1></textarea><button id=sendButton onclick=sendMessage()><span>Send</span><div class=thinking-indicator id=thinkingIndicator></div></button></div></div></div>
 <script>
-const messagesDiv=document.getElementById("messages"),messageInput=document.getElementById("messageInput");let ws;
-function connect(){const t=location.protocol==="https:"?"wss:":"ws:",o=t+"//"+location.host+"/ws/openapi_agent";addMessage("Connecting to: "+o,"info"),ws=new WebSocket(o),ws.onopen=()=>{addMessage("WebSocket connected.","info")},ws.onmessage=t=>{const o=JSON.parse(t.data);let e=o.content;"object"==typeof e?e="<pre>"+JSON.stringify(e,null,2)+"</pre>":(e=String(e).replace(/</g,"&lt;").replace(/>/g,"&gt;"),e=e.replace(/```json\\n([\s\S]*?)\\n```/g,(t,o)=>"<pre>"+o.replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</pre>"),e=e.replace(/```([\s\S]*?)\\n([\s\S]*?)\\n```/g,(t,o,n)=>"<pre><code>"+n.replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</code></pre>"),e=e.replace(/```\\n([\s\S]*?)\\n```/g,(t,o)=>"<pre>"+o.replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</pre>")),addMessage(`Agent (${o.type||"message"}): ${e}`,o.type||"agent")},ws.onerror=t=>{addMessage("WebSocket error. Check console. If page HTTPS, WS must be WSS.","error"),console.error("WebSocket error object:",t)},ws.onclose=t=>{let o="";t.code&&(o+=`Code: ${t.code} `),t.reason&&(o+=`Reason: ${t.reason} `),o+=t.wasClean?"(Clean close) ":"(Unclean close) ",addMessage("WebSocket disconnected. "+o+"Attempting to reconnect in 5s...","info"),console.log("WebSocket close event:",t),setTimeout(connect,5e3)}}
-function addMessage(t,o){const e=document.createElement("p");e.innerHTML=t,e.className="message "+o,messagesDiv.appendChild(e),messagesDiv.scrollTop=messagesDiv.scrollHeight}
-function sendMessage(){if(ws&&ws.readyState===WebSocket.OPEN){const t=messageInput.value;t.trim()&&(addMessage("You: "+t.replace(/</g,"&lt;").replace(/>/g,"&gt;"),"user"),ws.send(t),messageInput.value="")}else addMessage("WebSocket is not connected.","error")}
-messageInput.addEventListener("keypress",function(t){"Enter"===t.key&&!t.shiftKey&&(t.preventDefault(),sendMessage())}),connect();
+const messagesDiv=document.getElementById("messages"),messageInput=document.getElementById("messageInput"),graphJsonView=document.getElementById("graphJsonView").querySelector("pre"),sendButton=document.getElementById("sendButton"),thinkingIndicator=document.getElementById("thinkingIndicator");let ws;
+function showThinking(e){thinkingIndicator.style.display=e?"inline-block":"none",sendButton.disabled=e,messageInput.disabled=e}
+function connect(){const e=location.protocol==="https:"?"wss:":"ws:",t=e+"//"+location.host+"/ws/openapi_agent";addChatMessage("Connecting to: "+t,"info"),ws=new WebSocket(t),ws.onopen=()=>{addChatMessage("WebSocket connected.","info"),showThinking(!1)},ws.onmessage=e=>{const t=JSON.parse(e.data);let o=t.content;if("graph_update"===t.type)return graphJsonView.textContent=JSON.stringify(o,null,2),addChatMessage("Execution graph has been updated.","info"),void console.log("Graph Update Received:",o);if("status"===t.type&&o&&o.toLowerCase().includes("processing"))showThinking(!0);else if("final"===t.type||"error"===t.type||"info"===t.type||"warning"===t.type)showThinking(!1);else"intermediate"===t.type&&o&&o.toLowerCase().includes("processing");if("object"==typeof o)o="<pre>"+JSON.stringify(o,null,2)+"</pre>";else{o=String(o).replace(/</g,"&lt;").replace(/>/g,"&gt;");const e=t=>"<pre>"+t.replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</pre>",n=t=>"<pre><code>"+t.replace(/</g,"&lt;").replace(/>/g,"&gt;")+"</code></pre>";o=o.replace(/```json\\n([\s\S]*?)\\n```/g,(t,o)=>e(o)),o=o.replace(/```(\w*?)\\n([\s\S]*?)\\n```/g,(t,o,e)=>n(e)),o=o.replace(/```\\n([\s\S]*?)\\n```/g,(t,o)=>e(o))}addChatMessage(`Agent (${t.type||"message"}): ${o}`,t.type||"agent")},ws.onerror=e=>{addChatMessage("WebSocket error. Check console. If page HTTPS, WS must be WSS.","error"),console.error("WebSocket error object:",e),showThinking(!1)},ws.onclose=e=>{let t="";e.code&&(t+=`Code: ${e.code} `),e.reason&&(t+=`Reason: ${e.reason} `),t+=e.wasClean?"(Clean close) ":"(Unclean close) ",addChatMessage("WebSocket disconnected. "+t+"Attempting to reconnect in 5s...","info"),console.log("WebSocket close event:",e),showThinking(!1),setTimeout(connect,5e3)}}
+function addChatMessage(e,t){const o=document.createElement("div");o.innerHTML=e,o.className="message "+t,messagesDiv.appendChild(o),messagesDiv.scrollTop=messagesDiv.scrollHeight}
+function sendMessage(){if(ws&&ws.readyState===WebSocket.OPEN){const e=messageInput.value;e.trim()&&(addChatMessage("You: "+e.replace(/</g,"&lt;").replace(/>/g,"&gt;"),"user"),ws.send(e),messageInput.value="",showThinking(!0))}else addChatMessage("WebSocket is not connected.","error")}
+messageInput.addEventListener("input",function(){this.style.height="auto",this.style.height=this.scrollHeight+"px"}),messageInput.addEventListener("keypress",function(e){"Enter"===e.key&&!e.shiftKey&&(e.preventDefault(),sendMessage())}),connect();
 </script></body></html>
 """
 
