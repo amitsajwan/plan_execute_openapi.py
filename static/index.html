@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenAPI Agent (Gemini)</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="header">OpenAPI Multi-view Agent (Gemini LLM)</div>
+    <div class="main-container">
+        <div class="graph-view-container">
+            <h2>Execution Graph (JSON)</h2>
+            <div id="graphJsonView"><pre>No graph loaded yet.</pre></div>
+        </div>
+        <div class="chat-container">
+            <div id="messages"></div>
+            <div id="inputArea">
+                <textarea id="messageInput" placeholder="Paste OpenAPI spec (JSON/YAML) or ask a question..." rows="1"></textarea>
+                <button id="sendButton" onclick="sendMessage()">
+                    <span>Send</span>
+                    <div class="thinking-indicator" id="thinkingIndicator"></div>
+                </button>
+            </div>
+        </div>
+    </div>
+    <script src="/static/script.js"></script>
+</body>
+</html>
