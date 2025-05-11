@@ -23,7 +23,7 @@ class APIExecutor: # Basic Placeholder
         headers: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         # This is a mock implementation. Replace with your actual API calling logic.
-        logging.info(f"MOCK EXECUTE: {method} {endpoint}, Payload: {payload}, PathParams: {path_params}, QueryParams: {query_params}")
+        logging.info(f"MOCK EXECUTE: {method} {endpoint}, Payload: {str(payload)[:200]}..., PathParams: {path_params}, QueryParams: {query_params}")
         await asyncio.sleep(0.5) # Simulate network latency
         # Simulate response based on method or operationId
         if method.upper() == "GET":
@@ -57,9 +57,9 @@ logger = logging.getLogger(__name__)
 class WorkflowExecutionState(BaseModel):
     """Internal state for the workflow execution graph."""
     extracted_data: Dict[str, Any] = Field(default_factory=dict)
-    execution_log: List[Dict[str, Any]] = Field(default_factory=list)
+    execution_log: List[Dict[str, Any]] = Field(default_factory=list) # Keep this as Dict[str, Any] but ensure contents are simple
     current_node_id: Optional[str] = None
-    interrupt_payload_override: Optional[Dict[str, Any]] = None
+    interrupt_payload_override: Optional[Dict[str, Any]] = None # Should be JSON-serializable
 
     class Config:
         extra = 'allow'
@@ -108,9 +108,9 @@ class WorkflowExecutor:
 
 
     def _resolve_json_path(self, data_source: Dict[str, Any], json_path: str) -> Any:
-        """
-        Resolves a simple JSONPath-like string (e.g., '$.id', '$.data.items[0].name').
-        """
+        if not isinstance(data_source, dict): # Guard against non-dict data_source
+            logger.warning(f"[{self.session_id}] _resolve_json_path: data_source is not a dict for path '{json_path}'. Type: {type(data_source)}")
+            return None
         if not json_path.startswith('$.'):
             logger.warning(f"[{self.session_id}] Invalid JSONPath (must start with '$'): {json_path}")
             return None
@@ -140,9 +140,6 @@ class WorkflowExecutor:
         return current_data
 
     def _prepare_api_inputs(self, node_def: Node, current_state: WorkflowExecutionState) -> Dict[str, Any]:
-        """
-        Prepares path parameters, query parameters, headers, and request body.
-        """
         path_params: Dict[str, Any] = {}
         query_params: Dict[str, Any] = {}
         headers: Dict[str, Any] = {}
@@ -150,6 +147,11 @@ class WorkflowExecutor:
         final_request_body: Optional[Dict[str, Any]] = None
 
         for mapping in node_def.input_mappings:
+            # Ensure current_state.extracted_data is a dict before resolving
+            if not isinstance(current_state.extracted_data, dict):
+                logger.error(f"[{self.session_id}] Extracted data is not a dictionary. Cannot process input mappings for node {node_def.effective_id}.")
+                break # Stop processing mappings if extracted_data is corrupt
+
             value = self._resolve_json_path(current_state.extracted_data, mapping.source_data_path)
             if value is None:
                 logger.warning(f"[{self.session_id}] Could not resolve value for input '{mapping.target_parameter_name}' from source path '{mapping.source_data_path}' for node '{node_def.effective_id}'.")
@@ -165,7 +167,7 @@ class WorkflowExecutor:
                 if isinstance(value, dict):
                     if final_request_body is None: final_request_body = {}
                     final_request_body.update(value)
-                else:
+                else: # If value is not a dict, it becomes the body directly
                     final_request_body = value
             elif mapping.target_parameter_in.startswith("body."):
                 field_name = mapping.target_parameter_in.split(".", 1)[1]
@@ -182,46 +184,47 @@ class WorkflowExecutor:
         if not final_request_body and request_body_parts:
             final_request_body = request_body_parts
         
-        logger.debug(f"[{self.session_id}] Prepared inputs for '{node_def.effective_id}': PathP={path_params}, QueryP={query_params}, Body={final_request_body}")
+        logger.debug(f"[{self.session_id}] Prepared inputs for '{node_def.effective_id}': PathP={path_params}, QueryP={query_params}, Body={str(final_request_body)[:200]}...")
         return {
             "path_params": path_params,
             "query_params": query_params,
             "headers": headers,
-            "request_body": final_request_body,
+            "request_body": final_request_body, # This should be JSON-serializable
         }
 
     def _execute_api_node_wrapper(self, node_def: Node) -> Callable[[WorkflowExecutionState], Awaitable[WorkflowExecutionState]]:
-        """ Returns an async function that executes a single API node. """
         async def _run_node_instance(current_state: WorkflowExecutionState) -> WorkflowExecutionState:
             node_id = node_def.effective_id
             logger.info(f"[{self.session_id}] Executing node: {node_id} (OpID: {node_def.operationId})")
             await self.websocket_callback("node_execution_started", {"node_id": node_id, "operationId": node_def.operationId}, self.session_id)
             
-            current_state.current_node_id = node_id # For potential interruption context
+            current_state.current_node_id = node_id
             
             prepared_inputs = self._prepare_api_inputs(node_def, current_state)
             method = node_def.method
             api_path = node_def.path
 
+            log_entry_base = {"node_id": node_id, "operationId": node_def.operationId, "method": method, "path_template": api_path}
+
             if not method or not api_path:
                 error_msg = f"Node '{node_id}' is missing 'method' or 'path' definition."
                 logger.error(f"[{self.session_id}] {error_msg}")
                 await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": error_msg}, self.session_id)
-                current_state.execution_log.append({"node_id": node_id, "status": "error", "error": error_msg})
-                return current_state # Allow graph to continue or end
+                current_state.execution_log.append({**log_entry_base, "status": "error", "error": error_msg})
+                return current_state
 
             final_api_path = api_path
             for p_name, p_val in prepared_inputs["path_params"].items():
                 final_api_path = final_api_path.replace(f"{{{p_name}}}", str(p_val))
+            log_entry_base["calculated_path"] = final_api_path
 
-            actual_payload_for_api = prepared_inputs["request_body"]
+            actual_payload_for_api = prepared_inputs["request_body"] # Should be JSON-serializable
 
             if node_def.requires_confirmation:
-                # If an override was already provided by user (e.g. from a previous interrupt cycle for this node)
                 if current_state.interrupt_payload_override:
                     logger.info(f"[{self.session_id}] Node {node_id} using user-provided override payload.")
                     actual_payload_for_api = current_state.interrupt_payload_override
-                    current_state.interrupt_payload_override = None # Consume it
+                    current_state.interrupt_payload_override = None
                 else:
                     logger.info(f"[{self.session_id}] Node {node_id} requires confirmation. Interrupting workflow.")
                     await self.websocket_callback(
@@ -230,69 +233,95 @@ class WorkflowExecutor:
                             "node_id": node_id, "operationId": node_def.operationId,
                             "method": method, "path_template": api_path,
                             "calculated_path": final_api_path,
-                            "payload_template": node_def.payload_description,
-                            "calculated_payload": actual_payload_for_api, # Send the one we calculated
-                            "query_params": prepared_inputs["query_params"],
-                            "path_params": prepared_inputs["path_params"]
+                            "payload_template": node_def.payload_description, # String
+                            "calculated_payload": actual_payload_for_api, # JSON-serializable dict/list
+                            "query_params": prepared_inputs["query_params"], # Dict of simple types
+                            "path_params": prepared_inputs["path_params"]    # Dict of simple types
                         },
                         self.session_id
                     )
                     try:
                         logger.info(f"[{self.session_id}] Node {node_id} awaiting user confirmation via resume_queue...")
-                        # Wait for user to submit data via the queue
-                        confirmed_payload_from_user = await asyncio.wait_for(self.resume_queue.get(), timeout=600) # 10 min timeout
-                        self.resume_queue.task_done() # Important for queue management
+                        confirmed_payload_from_user = await asyncio.wait_for(self.resume_queue.get(), timeout=600)
+                        self.resume_queue.task_done()
                         logger.info(f"[{self.session_id}] Node {node_id} received confirmation payload: {str(confirmed_payload_from_user)[:100]}...")
-                        actual_payload_for_api = confirmed_payload_from_user # Use this payload
+                        actual_payload_for_api = confirmed_payload_from_user # This should also be JSON-serializable
                         await self.websocket_callback("node_resumed_with_payload", {"node_id": node_id}, self.session_id)
                     except asyncio.TimeoutError:
                         error_msg = f"Node {node_id} confirmation timed out."
                         logger.error(f"[{self.session_id}] {error_msg}")
                         await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": error_msg, "reason": "timeout"}, self.session_id)
-                        current_state.execution_log.append({"node_id": node_id, "status": "error", "error": error_msg})
-                        current_state.current_node_id = None # Clear before returning
-                        return current_state # Halt execution for this path or signal graph failure
-                    except Exception as e_q: # Catch other errors during queue wait
-                        error_msg = f"Error during confirmation wait for {node_id}: {e_q}"
-                        logger.error(f"[{self.session_id}] {error_msg}", exc_info=True)
-                        await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": str(e_q)}, self.session_id)
-                        current_state.execution_log.append({"node_id": node_id, "status": "error", "error": str(e_q)})
+                        current_state.execution_log.append({**log_entry_base, "status": "error", "error": error_msg, "reason": "timeout"})
                         current_state.current_node_id = None
                         return current_state
-
+                    except Exception as e_q:
+                        error_msg = f"Error during confirmation wait for {node_id}: {str(e_q)}"
+                        logger.error(f"[{self.session_id}] {error_msg}", exc_info=True)
+                        await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": error_msg}, self.session_id)
+                        current_state.execution_log.append({**log_entry_base, "status": "error", "error": error_msg})
+                        current_state.current_node_id = None
+                        return current_state
+            
+            log_entry_base["payload_sent_preview"] = str(actual_payload_for_api)[:200] # Log a preview
 
             try:
                 api_result = await self.api_executor.execute_api(
                     operationId=node_def.operationId, method=method, endpoint=final_api_path,
-                    payload=actual_payload_for_api,
+                    payload=actual_payload_for_api, # Must be JSON serializable if method requires body
                     query_params=prepared_inputs["query_params"],
                     headers=prepared_inputs["headers"]
                 )
-                logger.info(f"[{self.session_id}] API call for node {node_id} completed. Status: {api_result.get('status_code')}")
+                # api_result is a Dict from APIExecutor, assumed to be JSON-serializable
+                
+                status_code = api_result.get("status_code")
+                response_body_preview = str(api_result.get("response_body"))[:200] # Keep it short for logging
+                execution_time = api_result.get("execution_time")
+
+                logger.info(f"[{self.session_id}] API call for node {node_id} completed. Status: {status_code}, Time: {execution_time}s")
                 
                 newly_extracted_data = {}
-                if api_result.get("status_code") and 200 <= api_result["status_code"] < 300:
-                    await self.websocket_callback("node_execution_succeeded", {"node_id": node_id, "result_preview": str(api_result.get('response_body'))[:200]}, self.session_id)
+                if status_code and 200 <= status_code < 300:
+                    await self.websocket_callback("node_execution_succeeded", {"node_id": node_id, "result_preview": response_body_preview}, self.session_id)
+                    
+                    # Ensure response_body is a dict for _resolve_json_path
+                    response_body_for_extraction = api_result.get("response_body", {})
+                    if not isinstance(response_body_for_extraction, dict):
+                        logger.warning(f"[{self.session_id}] Response body for {node_id} is not a dict, type: {type(response_body_for_extraction)}. Output extraction may fail.")
+                        response_body_for_extraction = {} # Default to empty dict to prevent errors
+
                     for out_map in node_def.output_mappings:
-                        extracted_value = self._resolve_json_path(api_result.get("response_body", {}), out_map.source_data_path)
+                        extracted_value = self._resolve_json_path(response_body_for_extraction, out_map.source_data_path)
                         if extracted_value is not None:
+                            # Ensure extracted_value is serializable if it's complex
+                            # For now, assume _resolve_json_path returns simple types or serializable dicts/lists
                             newly_extracted_data[out_map.target_data_key] = extracted_value
                             logger.debug(f"[{self.session_id}] Extracted for '{node_id}': '{out_map.target_data_key}' = {str(extracted_value)[:50]}...")
-                    current_state.execution_log.append({"node_id": node_id, "status": "success", "result_summary": {"status": api_result.get("status_code"), "body_preview": str(api_result.get("response_body"))[:100]}, "extracted_here": newly_extracted_data.copy()})
+                    
+                    current_state.execution_log.append({
+                        **log_entry_base, "status": "success", 
+                        "status_code": status_code, "response_preview": response_body_preview,
+                        "execution_time_seconds": execution_time,
+                        "extracted_here": newly_extracted_data.copy() # Store copy of what was extracted by this node
+                    })
                 else:
-                    error_detail = api_result.get("response_body", {"error": "API call failed with status " + str(api_result.get("status_code"))})
-                    logger.error(f"[{self.session_id}] Node {node_id} API call failed: {error_detail}")
-                    await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": error_detail, "status_code": api_result.get("status_code")}, self.session_id)
-                    current_state.execution_log.append({"node_id": node_id, "status": "error", "error_details": error_detail, "full_result_summary": {"status": api_result.get("status_code")}})
+                    error_body_str = str(api_result.get("response_body", "No error body"))
+                    logger.error(f"[{self.session_id}] Node {node_id} API call failed or non-2xx status: {status_code}. Response: {error_body_str[:200]}")
+                    await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": error_body_str[:500], "status_code": status_code}, self.session_id)
+                    current_state.execution_log.append({
+                        **log_entry_base, "status": "api_error", 
+                        "status_code": status_code, "error_response_preview": error_body_str[:200],
+                        "execution_time_seconds": execution_time
+                    })
 
                 current_state.extracted_data.update(newly_extracted_data)
 
-            except Exception as e:
-                logger.critical(f"[{self.session_id}] Unhandled exception during API execution for node {node_id}: {e}", exc_info=True)
-                await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": str(e)}, self.session_id)
-                current_state.execution_log.append({"node_id": node_id, "status": "exception", "error": str(e)})
+            except Exception as e_api_call:
+                error_str = str(e_api_call)
+                logger.critical(f"[{self.session_id}] Unhandled exception during API execution for node {node_id}: {error_str}", exc_info=True)
+                await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": error_str[:500]}, self.session_id)
+                current_state.execution_log.append({**log_entry_base, "status": "exception", "error": error_str[:200]})
             
-            current_state.current_node_id = None # Clear after execution
+            current_state.current_node_id = None
             return current_state
         return _run_node_instance
 
@@ -301,7 +330,7 @@ class WorkflowExecutor:
         logger.info(f"[{self.session_id}] Starting workflow streaming. Config: {thread_config}")
         await self.websocket_callback("workflow_execution_started", {"session_id": self.session_id, "graph_description": self.workflow_def.description}, self.session_id)
 
-        final_state_to_return = None
+        final_state_to_return = None # Keep track of the most recent valid state
         try:
             async for event in self.compiled_graph.astream_events(self.initial_execution_state, config=thread_config, version="v1"):
                 event_type = event["event"]
@@ -310,51 +339,69 @@ class WorkflowExecutor:
 
                 logger.debug(f"[{self.session_id}] Workflow Stream Event: Type='{event_type}', Name='{event_name}', DataKeys='{list(event_data.keys())}'")
 
-                if event_type == "on_chain_end": # More reliable for node completion
+                if event_type == "on_chain_end": 
                     node_id_finished = event_name
-                    output_state = event_data.get("output")
-                    if isinstance(output_state, WorkflowExecutionState):
-                        final_state_to_return = output_state # Keep track of the latest state
+                    output_state_candidate = event_data.get("output")
+                    
+                    if isinstance(output_state_candidate, WorkflowExecutionState):
+                        final_state_to_return = output_state_candidate 
                         if node_id_finished and node_id_finished not in [START, END, "__start__", "__end__"]:
                             logger.info(f"[{self.session_id}] Event: Node '{node_id_finished}' finished processing.")
-                            last_log_entry = next((log for log in reversed(output_state.execution_log) if log.get("node_id") == node_id_finished), None)
+                            last_log_entry = next((log for log in reversed(final_state_to_return.execution_log) if log.get("node_id") == node_id_finished), None)
                             if last_log_entry:
                                 await self.websocket_callback("node_log_update", {"node_id": node_id_finished, "log_entry": last_log_entry}, self.session_id)
                         
-                        # Check if the node that just finished was the one waiting for confirmation
-                        # This logic is now handled inside _execute_api_node_wrapper by awaiting the queue.
-                        # current_node_id on output_state should be None if the node completed successfully.
-                        if output_state.current_node_id:
-                             logger.warning(f"[{self.session_id}] Node '{output_state.current_node_id}' finished but current_node_id is still set in state. This might indicate an issue or an unhandled interrupt.")
-
+                        if final_state_to_return.current_node_id:
+                             logger.warning(f"[{self.session_id}] Node '{final_state_to_return.current_node_id}' appears finished but current_node_id is still set in state. This might indicate an issue if it wasn't an intended pause.")
 
                 elif event_type == "on_graph_end":
                     final_output_data = event_data.get("output")
                     if isinstance(final_output_data, WorkflowExecutionState):
                         final_state_to_return = final_output_data
-                    logger.info(f"[{self.session_id}] Workflow execution finished. Final state (from on_graph_end): {final_state_to_return.dict() if final_state_to_return else 'N/A'}")
-                    await self.websocket_callback("workflow_execution_completed", {"final_state": final_state_to_return.dict() if final_state_to_return else {}}, self.session_id)
-                    return # End of workflow
+                    else: # If output is not WorkflowExecutionState, try to use the last known valid state
+                        logger.warning(f"[{self.session_id}] on_graph_end output was not WorkflowExecutionState. Type: {type(final_output_data)}. Using last known valid state if available.")
+                    
+                    log_final_state = final_state_to_return.dict() if final_state_to_return else {}
+                    logger.info(f"[{self.session_id}] Workflow execution finished. Final state (from on_graph_end or last known): {str(log_final_state)[:500]}...")
+                    await self.websocket_callback("workflow_execution_completed", {"final_state": log_final_state}, self.session_id)
+                    return 
 
-                elif event_type == "on_tool_error" or event_type == "on_chain_error" or event_type == "on_node_error":
+                elif event_type in ["on_tool_error", "on_chain_error", "on_node_error", "on_llm_error", "on_retriever_error"]: # Broader error catching
                     node_name_with_error = event_name
-                    error_details = str(event_data.get("output") or event_data) # Error might be in output
-                    logger.error(f"[{self.session_id}] Error in workflow at node/tool '{node_name_with_error}': {error_details}")
-                    await self.websocket_callback("workflow_execution_failed", {"node_id": node_name_with_error, "error": error_details}, self.session_id)
-                    return # End streaming on error
+                    # Try to get error from 'output' if it's a dict, else stringify event_data
+                    error_details_raw = event_data.get("output", event_data)
+                    error_details_str = str(error_details_raw)
+                    
+                    logger.error(f"[{self.session_id}] Error event '{event_type}' in workflow at '{node_name_with_error}': {error_details_str[:500]}")
+                    await self.websocket_callback("workflow_execution_failed", {"node_id": node_name_with_error, "error_event_type": event_type, "error": error_details_str[:1000]}, self.session_id) # Send more details
+                    return 
         
         except Exception as e_stream:
-            logger.critical(f"[{self.session_id}] Unhandled exception during workflow streaming: {e_stream}", exc_info=True)
-            await self.websocket_callback("workflow_execution_failed", {"error": f"Streaming error: {str(e_stream)}"}, self.session_id)
+            error_str_stream = str(e_stream)
+            logger.critical(f"[{self.session_id}] Unhandled exception during workflow streaming: {error_str_stream}", exc_info=True)
+            await self.websocket_callback("workflow_execution_failed", {"error": f"Critical streaming error: {error_str_stream[:500]}"}, self.session_id)
             return
 
-        logger.info(f"[{self.session_id}] Workflow streaming loop completed (or exited without explicit on_graph_end).")
-        # Fallback if on_graph_end wasn't explicitly caught
-        await self.websocket_callback("workflow_execution_completed", {"message": "Streaming ended.", "final_state_preview": final_state_to_return.dict(exclude={'execution_log'}) if final_state_to_return else {}}, self.session_id)
+        # Fallback if on_graph_end wasn't explicitly caught (e.g., stream ended prematurely)
+        logger.info(f"[{self.session_id}] Workflow streaming loop completed (possibly without explicit on_graph_end).")
+        final_state_dict = {}
+        if final_state_to_return and isinstance(final_state_to_return, WorkflowExecutionState):
+            try:
+                final_state_dict = final_state_to_return.model_dump(exclude={'execution_log': {'__all__': {'result', 'full_result'}}}) # Example of excluding large fields
+            except Exception: # Fallback if model_dump fails
+                final_state_dict = {"message": "State could not be fully serialized."}
+        
+        await self.websocket_callback("workflow_execution_completed", {"message": "Streaming ended.", "final_state_summary": final_state_dict}, self.session_id)
 
 
     async def submit_interrupt_value(self, value: Dict[str, Any]):
         """ Called by the server to provide data for a paused node. """
-        logger.info(f"[{self.session_id}] Interrupt value submitted to queue: {str(value)[:100]}...")
-        await self.resume_queue.put(value)
+        # Ensure value is JSON-serializable as it might be part of state if an error occurs during its processing
+        try:
+            json.dumps(value) # Test serializability
+            logger.info(f"[{self.session_id}] Interrupt value submitted to queue: {str(value)[:100]}...")
+            await self.resume_queue.put(value)
+        except TypeError as e:
+            logger.error(f"[{self.session_id}] Failed to submit non-JSON-serializable interrupt value: {e}. Value: {str(value)[:200]}")
+            # Optionally, notify client about this error if possible, or handle appropriately.
 
