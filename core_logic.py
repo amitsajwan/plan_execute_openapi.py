@@ -25,8 +25,7 @@ class OpenAPICoreLogic:
         tool_name = "parse_openapi_spec"
         state.response = "Parsing OpenAPI specification..." 
         state.update_scratchpad_reason(tool_name, "Attempting to parse OpenAPI spec.")
-        # logger.info("Executing parse_openapi_spec node.") 
-
+        
         spec_text = state.openapi_spec_string
         if not spec_text:
             state.response = "No OpenAPI specification text provided."
@@ -188,7 +187,6 @@ class OpenAPICoreLogic:
         current_goal = goal or state.plan_generation_goal or "General workflow"
         state.response = f"Building initial API workflow graph for goal: '{current_goal[:50]}...'" 
         state.update_scratchpad_reason(tool_name, f"Generating graph. Goal: {current_goal}")
-        # logger.info(f"Generating graph. Goal: {current_goal}") 
 
         if not state.identified_apis:
             state.response = "Cannot generate graph: No APIs identified."
@@ -197,9 +195,50 @@ class OpenAPICoreLogic:
             state.next_step = "responder"
             return state
 
-        apis_str = "\n".join([f"- {a['operationId']}: {a['summary']}" for a in state.identified_apis[:15]])
+        apis_str = "\n".join([f"- opId: {a['operationId']}, summary: {a['summary']}" for a in state.identified_apis[:15]])
         fbk_str = f"Feedback: {state.graph_regeneration_reason}" if state.graph_regeneration_reason else ""
-        prompt = f"Goal: \"{current_goal}\". {fbk_str} APIs (sample):\n{apis_str}\nDesign a JSON API graph (nodes, edges, input_mappings for data flow e.g. '$.id', overall description). Use 3-5 relevant APIs. CRITICAL: All `operationId` or `display_name` values used in `edges` (for `from_node` and `to_node`) MUST correspond to an `operationId` or `display_name` of a node defined in the `nodes` list of THIS SAME JSON output. Model:\n{{\"nodes\":[{{\"operationId\":\"id\",\"summary\":\"s\",\"description\":\"d\",\"payload_description\":\"p\",\"input_mappings\":[{{\"source_operation_id\":\"sid\",\"source_data_path\":\"spath\",\"target_parameter_name\":\"tpn\",\"target_parameter_in\":\"tin\"}}]}}],\"edges\":[{{\"from_node\":\"f\",\"to_node\":\"t\",\"description\":\"d\"}}],\"description\":\"desc\",\"refinement_summary\":\"Initial graph\"}}\nOutput ONLY JSON."
+        
+        prompt = f"""
+        Goal: "{current_goal}". {fbk_str} APIs (sample):\n{apis_str}
+        Design a JSON API graph. The graph MUST include:
+        1. A "START_NODE" with `operationId: "START_NODE"`, `summary: "Workflow Start"`. It should have no input_mappings.
+        2. A "END_NODE" with `operationId: "END_NODE"`, `summary: "Workflow End"`. It should have no input_mappings that target its own parameters (as it's a conceptual end).
+        3. Between 2-5 actual API operation nodes from the provided API list.
+        
+        Connections:
+        - The "START_NODE" MUST have outgoing edges to the first actual API operation(s) in your plan.
+        - The last actual API operation(s) in your plan MUST have outgoing edges to the "END_NODE".
+        - No edges should point TO "START_NODE". No edges should originate FROM "END_NODE" (unless the graph is only START_NODE -> END_NODE).
+
+        CRITICAL: All `operationId` or `display_name` values used in `edges` (for `from_node` and `to_node`) MUST correspond to an `operationId` or `display_name` of a node defined in the `nodes` list of THIS SAME JSON output (including START_NODE and END_NODE).
+        
+        Define `nodes` (API calls + START_NODE, END_NODE) and `edges` (dependencies).
+        For actual API nodes, attempt to define `input_mappings` if it depends on data from a previous node:
+          - `source_operation_id`: `effective_id` of the source node.
+          - `source_data_path`: Plausible JSONPath (e.g., `$.id`, `$.data.token`) from source's typical response.
+          - `target_parameter_name`: Parameter name in the current node.
+          - `target_parameter_in`: Location (e.g., 'path', 'query', 'body.fieldName').
+        Provide an overall `description` of the workflow.
+        Use `display_name` for nodes if an `operationId` is used multiple times (not applicable for START_NODE/END_NODE).
+
+        Pydantic Model Structure (JSON):
+        {{
+          "nodes": [
+            {{
+              "operationId": "string", "display_name": "string" (optional), "summary": "string",
+              "description": "string (purpose in this workflow)",
+              "payload_description": "string (brief example request/response for this step, or 'N/A' for START/END nodes)",
+              "input_mappings": [
+                {{"source_operation_id": "string", "source_data_path": "string", "target_parameter_name": "string", "target_parameter_in": "string"}}
+              ]
+            }}
+          ],
+          "edges": [ {{"from_node": "string", "to_node": "string", "description": "string"}} ],
+          "description": "string (overall workflow description)",
+          "refinement_summary": "string (e.g., 'Initial graph with START/END nodes')"
+        }}
+        Output ONLY the JSON object.
+        """
         
         try:
             llm_response = llm_call_helper(self.worker_llm, prompt)
@@ -218,7 +257,7 @@ class OpenAPICoreLogic:
                 error_msg = "LLM failed to produce a valid and self-consistent GraphOutput JSON structure for the initial graph."
                 logger.error(error_msg + f" Raw LLM output snippet: {llm_response[:300]}...")
                 state.response = "Failed to generate a valid execution graph (AI output format or structure error)."
-                state.execution_graph = None # Ensure graph is None
+                state.execution_graph = None 
                 state.graph_regeneration_reason = "LLM output was not a valid GraphOutput object."
                 if state.scratchpad.get('graph_gen_attempts', 0) < 1:
                     state.scratchpad['graph_gen_attempts'] = state.scratchpad.get('graph_gen_attempts', 0) + 1
@@ -241,8 +280,7 @@ class OpenAPICoreLogic:
         tool_name = "process_schema_pipeline"
         state.response = "Starting API analysis pipeline..." 
         state.update_scratchpad_reason(tool_name, "Starting schema pipeline.")
-        # logger.info("Executing process_schema_pipeline.") 
-
+        
         if not state.openapi_schema:
             state.response = "Cannot run pipeline: No schema."
             state.next_step = "handle_unknown"; return state
@@ -252,7 +290,6 @@ class OpenAPICoreLogic:
         state.plan_generation_goal = state.plan_generation_goal or "Provide a general overview workflow."
         state.scratchpad['graph_gen_attempts'] = 0
         state.scratchpad['refinement_validation_failures'] = 0
-
 
         self._generate_llm_schema_summary(state) 
         if state.schema_summary and "Error generating summary: 429" in state.schema_summary : 
@@ -275,7 +312,6 @@ class OpenAPICoreLogic:
         tool_name = "verify_graph"
         state.response = "Verifying API workflow graph..." 
         state.update_scratchpad_reason(tool_name, "Verifying graph.")
-        # logger.info("Executing verify_graph node.") 
 
         if not state.execution_graph: 
             state.response = state.response or "No execution graph to verify (possibly due to generation error)."
@@ -285,8 +321,37 @@ class OpenAPICoreLogic:
 
         is_dag, cycle_msg = check_for_cycles(state.execution_graph)
         
-        if is_dag:
-            state.response = "Graph verification successful (DAG and basic structure)." 
+        # Additional checks for START_NODE and END_NODE
+        start_node_present = any(node.operationId == "START_NODE" for node in state.execution_graph.nodes)
+        end_node_present = any(node.operationId == "END_NODE" for node in state.execution_graph.nodes)
+        
+        structural_issues = []
+        if not start_node_present:
+            structural_issues.append("START_NODE is missing.")
+        if not end_node_present:
+            structural_issues.append("END_NODE is missing.")
+        
+        # Check START_NODE linkage (should have outgoing, no incoming unless it's the only edge to END_NODE)
+        if start_node_present:
+            start_outgoing = any(edge.from_node == "START_NODE" for edge in state.execution_graph.edges)
+            start_incoming = any(edge.to_node == "START_NODE" for edge in state.execution_graph.edges)
+            if not start_outgoing and len(state.execution_graph.nodes) > 2 : # More than just START -> END
+                structural_issues.append("START_NODE has no outgoing edges to actual operations.")
+            if start_incoming:
+                 structural_issues.append("START_NODE should not have incoming edges.")
+        
+        # Check END_NODE linkage (should have incoming, no outgoing)
+        if end_node_present:
+            end_incoming = any(edge.to_node == "END_NODE" for edge in state.execution_graph.edges)
+            end_outgoing = any(edge.from_node == "END_NODE" for edge in state.execution_graph.edges)
+            if not end_incoming and len(state.execution_graph.nodes) > 2:
+                 structural_issues.append("END_NODE has no incoming edges from actual operations.")
+            if end_outgoing:
+                structural_issues.append("END_NODE should not have outgoing edges.")
+
+
+        if is_dag and not structural_issues:
+            state.response = "Graph verification successful (DAG, START/END nodes, and basic structure)." 
             state.update_scratchpad_reason(tool_name, "Graph verification successful.")
             logger.info("Graph verification successful.")
             state.graph_regeneration_reason = None 
@@ -314,13 +379,17 @@ class OpenAPICoreLogic:
                 else: state.response = "Graph is verified. " + (state.execution_graph.refinement_summary or "No specific refinement summary.")
                 state.next_step = "describe_graph" 
         else: 
-            state.response = f"Graph verification failed: {cycle_msg}. " 
-            state.graph_regeneration_reason = f"Verification failed (not a DAG): {cycle_msg}."
-            logger.warning(f"Graph verification failed (cycle detected): {cycle_msg}.")
+            error_details = cycle_msg if not is_dag else ""
+            if structural_issues:
+                error_details += (" " if error_details else "") + " ".join(structural_issues)
+            
+            state.response = f"Graph verification failed: {error_details}. " 
+            state.graph_regeneration_reason = f"Verification failed: {error_details}."
+            logger.warning(f"Graph verification failed: {error_details}.")
             if state.graph_refinement_iterations < state.max_refinement_iterations:
                 state.next_step = "refine_api_graph"
             else: 
-                logger.warning("Max refinements hit, but graph still has cycles. Attempting full regeneration.")
+                logger.warning("Max refinements hit, but graph still has issues. Attempting full regeneration.")
                 state.next_step = "_generate_execution_graph"
         state.update_scratchpad_reason(tool_name, f"Verification result: {state.response}")
         return state
@@ -330,7 +399,6 @@ class OpenAPICoreLogic:
         iteration = state.graph_refinement_iterations + 1
         state.response = f"Refining API workflow graph (Attempt {iteration}/{state.max_refinement_iterations})..." 
         state.update_scratchpad_reason(tool_name, f"Refining graph. Iteration: {iteration}")
-        # logger.info(f"Executing refine_api_graph. Iteration: {iteration}")
 
         if not state.execution_graph: 
             state.response = "No graph to refine. Please generate a graph first."
@@ -341,7 +409,28 @@ class OpenAPICoreLogic:
 
         graph_json = state.execution_graph.model_dump_json(indent=2)
         apis_ctx = "\n".join([f"- {a['operationId']}: {a['summary']}" for a in state.identified_apis[:10]])
-        prompt = f"Goal: \"{state.plan_generation_goal or 'General workflow'}\". Feedback: {state.graph_regeneration_reason or 'N/A. This might be the first refinement attempt or previous attempts were structurally okay.'}. Current Graph (JSON):\n```json\n{graph_json}\n```\nAPIs (sample):\n{apis_ctx}\nRefine this graph. Focus: Goal alignment, logical flow, data flow (input_mappings like '$.id'), clarity. CRITICAL: All `operationId` or `display_name` values used in `edges` (for `from_node` and `to_node`) MUST correspond to an `operationId` or `display_name` of a node defined in the `nodes` list of THIS SAME JSON output. Output ONLY refined GraphOutput JSON with a 'refinement_summary' field. Model:\n{{\"nodes\":[{{\"operationId\":\"id\",\"summary\":\"s\",\"description\":\"d\",\"payload_description\":\"p\",\"input_mappings\":[{{\"source_operation_id\":\"sid\",\"source_data_path\":\"spath\",\"target_parameter_name\":\"tpn\",\"target_parameter_in\":\"tin\"}}]}}],\"edges\":[{{\"from_node\":\"f\",\"to_node\":\"t\",\"description\":\"d\"}}],\"description\":\"desc\",\"refinement_summary\":\"summary\"}}"
+        prompt = f"""
+        Goal: "{state.plan_generation_goal or 'General workflow'}". 
+        Feedback: {state.graph_regeneration_reason or 'N/A. This might be the first refinement attempt or previous attempts were structurally okay.'}. 
+        Current Graph (JSON to be refined):
+        ```json
+        {graph_json}
+        ```
+        APIs (sample for context):
+        {apis_ctx}
+
+        Refine this graph. Ensure the refined graph:
+        1. Includes a "START_NODE" (`operationId: "START_NODE"`) and an "END_NODE" (`operationId: "END_NODE"`).
+        2. "START_NODE" connects to the first actual API operation(s).
+        3. Last actual API operation(s) connect to "END_NODE".
+        4. No cycles.
+        5. Focus on: Goal alignment, logical flow, data flow (input_mappings like '$.id'), clarity. 
+        
+        CRITICAL: All `operationId` or `display_name` values used in `edges` (for `from_node` and `to_node`) MUST correspond to an `operationId` or `display_name` of a node defined in the `nodes` list of THIS SAME JSON output (including START_NODE and END_NODE).
+        
+        Output ONLY refined GraphOutput JSON with a 'refinement_summary' field. Model:
+        {{\"nodes\":[{{\"operationId\":\"id\",\"summary\":\"s\",\"description\":\"d\",\"payload_description\":\"p\",\"input_mappings\":[{{\"source_operation_id\":\"sid\",\"source_data_path\":\"spath\",\"target_parameter_name\":\"tpn\",\"target_parameter_in\":\"tin\"}}]}}],\"edges\":[{{\"from_node\":\"f\",\"to_node\":\"t\",\"description\":\"d\"}}],\"description\":\"desc\",\"refinement_summary\":\"summary\"}}
+        """
         
         try:
             llm_response_str = llm_call_helper(self.worker_llm, prompt)
@@ -389,7 +478,6 @@ class OpenAPICoreLogic:
     def describe_graph(self, state: BotState) -> BotState:
         tool_name = "describe_graph"
         state.response = "Preparing graph description..." 
-        # logger.info("Executing describe_graph node.") 
         if not state.execution_graph:
             state.response = state.response or "No execution graph available to describe."
             logger.warning("describe_graph: No execution_graph found in state.")
@@ -401,7 +489,6 @@ class OpenAPICoreLogic:
                 try: desc = llm_call_helper(self.worker_llm, prompt)
                 except Exception as e: desc = f"Error generating dynamic desc: {str(e)[:100]}... Stored: {state.execution_graph.description or 'N/A'}"
             
-            # Ensure final description is user-friendly
             final_desc = f"### Current API Workflow for: '{state.plan_generation_goal or 'General Use'}'\n\n{desc}"
             if state.execution_graph.refinement_summary: 
                 final_desc += f"\n\n**Last Refinement Note:** {state.execution_graph.refinement_summary}"
@@ -428,15 +515,13 @@ class OpenAPICoreLogic:
     def answer_openapi_query(self, state: BotState) -> BotState:
         tool_name = "answer_openapi_query"
         state.response = "Thinking about your question..." 
-        # logger.info("Executing answer_openapi_query node.") 
         if not state.openapi_schema:
             state.response = "No OpenAPI spec loaded."; state.next_step = "responder"; return state
         
-        # Prepare a detailed context string
         api_list_md = ""
         if state.identified_apis:
             api_list_md = "\nIdentified API Operations:\n"
-            for api in state.identified_apis[:10]: # Show up to 10
+            for api in state.identified_apis[:10]: 
                 api_list_md += f"- **{api['operationId']}**: {api['method']} {api['path']} - _{api['summary']}_\n"
             if len(state.identified_apis) > 10:
                 api_list_md += "- ... and more.\n"
@@ -450,13 +535,13 @@ class OpenAPICoreLogic:
         payload_info_md = ""
         if state.user_input:
             for op_id, desc_text in state.payload_descriptions.items():
-                if op_id.lower() in state.user_input.lower(): # Simple check if op_id is mentioned
+                if op_id.lower() in state.user_input.lower(): 
                     payload_info_md = f"\nPayload/Response Example for '{op_id}':\n{desc_text}\n"
                     break
         
         prompt = f"""
         You are an expert API assistant. Answer the user's question based on the provided context.
-        Use Markdown for formatting (headings, lists, bolding, italics, code blocks for JSON).
+        Use Markdown for formatting (e.g., headings, lists with bullet points, bolding, italics, and code blocks for JSON snippets).
 
         User Question: "{state.user_input}"
 
@@ -468,6 +553,8 @@ class OpenAPICoreLogic:
         {payload_info_md or 'No specific payload example requested in this query.'}
 
         Please provide a clear, well-formatted, and helpful answer. If the information is not available in the context, state that.
+        If listing multiple items (like API operations), use bullet points for clarity.
+        If showing example JSON, ensure it is in a Markdown code block (e.g., ```json ... ```).
         """
         try: 
             state.response = llm_call_helper(self.worker_llm, prompt) 
@@ -480,7 +567,6 @@ class OpenAPICoreLogic:
     def interactive_query_planner(self, state: BotState) -> BotState:
         tool_name = "interactive_query_planner"
         state.response = "Planning how to address your query..." 
-        # logger.info(f"Executing {tool_name} for query: {state.user_input}") 
         state.scratchpad.pop('interactive_action_plan', None); state.scratchpad.pop('current_interactive_action_idx', None)
         state.scratchpad.pop('current_interactive_results', None)
 
@@ -512,7 +598,7 @@ class OpenAPICoreLogic:
         Task:
         1. Understand the user's query.
         2. Create a short, logical "interactive_action_plan" (a list of action objects) to address it.
-           For structural changes like "add X at the end", prefer `regenerate_graph_with_new_goal` by formulating a new goal that includes this change.
+           For structural changes like "add X at the end", prefer `regenerate_graph_with_new_goal` by formulating a new goal that includes this change (e.g., "Original goal, but also add operation Y at the end before END_NODE").
         3. If the query is simple, the plan might just be one "answer_query_directly" or "synthesize_final_answer" action.
         4. Provide a brief "user_query_understanding".
 
@@ -577,8 +663,7 @@ class OpenAPICoreLogic:
         action = plan[idx]; name = action.get("action_name"); params = action.get("action_params", {}); desc = action.get("description","")
         state.response = f"Executing internal step ({idx+1}/{len(plan)}): {desc[:50]}..." 
         state.update_scratchpad_reason(tool_name, f"Executing interactive action ({idx+1}/{len(plan)}): {name} - {desc}")
-        # logger.info(f"Executing interactive action: {name} with params: {params}") 
-
+        
         action_result_message = f"Action '{name}' executed." 
         
         try:
@@ -614,7 +699,6 @@ class OpenAPICoreLogic:
 
     def handle_unknown(self, state: BotState) -> BotState:
         tool_name = "handle_unknown"
-        # logger.warning(f"Executing {tool_name}. Current response (if any): {state.response}") 
         if not state.response or "error" not in str(state.response).lower(): 
             state.response = "I'm not sure how to process that. Could you rephrase or provide an OpenAPI spec first?"
         state.update_scratchpad_reason(tool_name, f"Handling unknown. Final response to be: {state.response}")
