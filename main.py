@@ -122,9 +122,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 processed_node_state = BotState.model_validate(node_output_value)
                             except ValidationError as e_val:
                                 logger.error(f"[{session_id}] Pydantic validation error for node '{event_name}' output dict: {e_val}. Data: {str(node_output_value)[:200]}", exc_info=False)
-                        # else: # No need to log for every non-BotState output (e.g. router string output)
-                            # logger.warning(f"[{session_id}] Node '{event_name}' output was not a BotState instance or expected dict. Type: {type(node_output_value)}, Content: {str(node_output_value)[:200]}")
-
+                        
                         if processed_node_state:
                             current_turn_final_state_obj = processed_node_state 
 
@@ -183,8 +181,80 @@ HTML_TEST_PAGE = """
 const messagesDiv=document.getElementById("messages"),messageInput=document.getElementById("messageInput"),graphJsonView=document.getElementById("graphJsonView").querySelector("pre"),sendButton=document.getElementById("sendButton"),thinkingIndicator=document.getElementById("thinkingIndicator");let ws;
 function showThinking(e){thinkingIndicator.style.display=e?"inline-block":"none",sendButton.disabled=e,messageInput.disabled=e}
 function escapeHtml(unsafe){return unsafe.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/\'/g,"&#039;")}
-function formatFinalMessage(contentStr){let htmlContent="";const lines=contentStr.split('\\n');let inCodeBlock=!1,codeLang="";lines.forEach(line=>{if(line.startsWith("```json")){htmlContent+="<pre><code>";inCodeBlock=!0;codeLang="json"}else if(line.startsWith("```")&&inCodeBlock){htmlContent+="</code></pre>";inCodeBlock=!1;codeLang=""}else if(inCodeBlock){htmlContent+=escapeHtml(line)+"\\n"}else if(line.startsWith("# "))htmlContent+=`<h4>${escapeHtml(line.substring(2))}</h4>`;else if(line.startsWith("## "))htmlContent+=`<h5>${escapeHtml(line.substring(3))}</h5>`;else if(line.startsWith("- ") || line.startsWith("* "))htmlContent+=`<ul><li>${escapeHtml(line.substring(2))}</li></ul>`;else if(line.trim()==="")htmlContent+="<br>";else htmlContent+=`<p>${escapeHtml(line)}</p>`});if(inCodeBlock)htmlContent+="</code></pre>";return htmlContent}
-function connect(){const e=location.protocol==="https:"?"wss:":"ws:",t=e+"//"+location.host+"/ws/openapi_agent";addChatMessage("Connecting to: "+t,"info"),ws=new WebSocket(t),ws.onopen=()=>{addChatMessage("WebSocket connected.","info"),showThinking(!1)},ws.onmessage=e=>{const t=JSON.parse(e.data);let o=t.content;if("graph_update"===t.type)return graphJsonView.textContent=JSON.stringify(o,null,2),addChatMessage("Execution graph has been updated.","info"),void console.log("Graph Update Received:",o);if("status"===t.type&&o&&o.toLowerCase().includes("processing"))showThinking(!0);else if("final"===t.type||"error"===t.type||"info"===t.type||"warning"===t.type)showThinking(!1);"final"===t.type&&"string"==typeof o?o=formatFinalMessage(o):"object"==typeof o?o="<pre>"+escapeHtml(JSON.stringify(o,null,2))+"</pre>":"string"==typeof o&&(o=escapeHtml(o));addChatMessage(`Agent (${t.type||"message"}): ${o}`,t.type||"agent")},ws.onerror=e=>{addChatMessage("WebSocket error. Check console. If page HTTPS, WS must be WSS.","error"),console.error("WebSocket error object:",e),showThinking(!1)},ws.onclose=e=>{let t="";e.code&&(t+=`Code: ${e.code} `),e.reason&&(t+=`Reason: ${e.reason} `),t+=e.wasClean?"(Clean close) ":"(Unclean close) ",addChatMessage("WebSocket disconnected. "+t+"Attempting to reconnect in 5s...","info"),console.log("WebSocket close event:",e),showThinking(!1),setTimeout(connect,5e3)}}
+
+function formatMessageContent(contentStr, type) {
+    if (typeof contentStr !== 'string') {
+        return '<pre>' + escapeHtml(JSON.stringify(contentStr, null, 2)) + '</pre>';
+    }
+
+    // Only apply rich formatting for 'final' agent messages
+    if (type !== 'agent' && type !== 'final') { // Type 'agent' is used by default if not specified
+        return escapeHtml(contentStr);
+    }
+    
+    let htmlContent = '';
+    const lines = contentStr.split('\\n'); // Correctly split by newline character
+    let inCodeBlock = false;
+    let inList = false;
+
+    for (let i = 0; i < lines.length; i++) {
+        let line = lines[i];
+
+        if (line.startsWith("```json")) {
+            if (inList) { htmlContent += '</ul>'; inList = false; }
+            htmlContent += '<pre><code class="language-json">';
+            inCodeBlock = true;
+            line = line.substring(7); // Remove ```json
+        } else if (line.startsWith("```") && inCodeBlock) {
+            htmlContent += '</code></pre>';
+            inCodeBlock = false;
+            continue; 
+        } else if (line.startsWith("```")) { // Generic code block start
+             if (inList) { htmlContent += '</ul>'; inList = false; }
+            htmlContent += '<pre><code>';
+            inCodeBlock = true;
+            line = line.substring(3);
+        }
+
+
+        if (inCodeBlock) {
+            htmlContent += escapeHtml(line) + (i < lines.length - 1 ? '\\n' : ''); // Preserve newlines in code
+        } else {
+            if (line.startsWith("### ")) {
+                if (inList) { htmlContent += '</ul>'; inList = false; }
+                htmlContent += `<h4>${escapeHtml(line.substring(4))}</h4>`;
+            } else if (line.startsWith("## ")) {
+                if (inList) { htmlContent += '</ul>'; inList = false; }
+                htmlContent += `<h5>${escapeHtml(line.substring(3))}</h5>`;
+            } else if (line.startsWith("# ")) {
+                 if (inList) { htmlContent += '</ul>'; inList = false; }
+                htmlContent += `<h6>${escapeHtml(line.substring(2))}</h6>`;
+            } else if (line.startsWith("- ") || line.startsWith("* ")) {
+                if (!inList) {
+                    htmlContent += '<ul>';
+                    inList = true;
+                }
+                htmlContent += `<li>${escapeHtml(line.substring(line.startsWith("- ") ? 2 : 1))}</li>`;
+            } else {
+                if (inList) {
+                    htmlContent += '</ul>';
+                    inList = false;
+                }
+                if (line.trim() === "") {
+                    htmlContent += "<br>";
+                } else {
+                    htmlContent += `<p>${escapeHtml(line)}</p>`;
+                }
+            }
+        }
+    }
+    if (inCodeBlock) htmlContent += '</code></pre>'; // Close if unclosed
+    if (inList) htmlContent += '</ul>'; // Close if unclosed
+    
+    return htmlContent;
+}
+
+function connect(){const e=location.protocol==="https:"?"wss:":"ws:",t=e+"//"+location.host+"/ws/openapi_agent";addChatMessage("Connecting to: "+t,"info"),ws=new WebSocket(t),ws.onopen=()=>{addChatMessage("WebSocket connected.","info"),showThinking(!1)},ws.onmessage=e=>{const t=JSON.parse(e.data);let o=t.content;const type = t.type || "agent"; if("graph_update"===t.type)return graphJsonView.textContent=JSON.stringify(o,null,2),addChatMessage("Execution graph has been updated.","info"),void console.log("Graph Update Received:",o);if("status"===t.type&&o&&o.toLowerCase().includes("processing"))showThinking(!0);else if("final"===t.type||"error"===t.type||"info"===t.type||"warning"===t.type)showThinking(!1);else"intermediate"===t.type&&o&&o.toLowerCase().includes("processing"); o = formatMessageContent(o, type); addChatMessage(`Agent (${type}): ${o}`,type)},ws.onerror=e=>{addChatMessage("WebSocket error. Check console. If page HTTPS, WS must be WSS.","error"),console.error("WebSocket error object:",e),showThinking(!1)},ws.onclose=e=>{let t="";e.code&&(t+=`Code: ${e.code} `),e.reason&&(t+=`Reason: ${e.reason} `),t+=e.wasClean?"(Clean close) ":"(Unclean close) ",addChatMessage("WebSocket disconnected. "+t+"Attempting to reconnect in 5s...","info"),console.log("WebSocket close event:",e),showThinking(!1),setTimeout(connect,5e3)}}
 function addChatMessage(e,t){const o=document.createElement("div");o.innerHTML=e,o.className="message "+t,messagesDiv.appendChild(o),messagesDiv.scrollTop=messagesDiv.scrollHeight}
 function sendMessage(){if(ws&&ws.readyState===WebSocket.OPEN){const e=messageInput.value;e.trim()&&(addChatMessage("You: "+escapeHtml(e),"user"),ws.send(e),messageInput.value="",showThinking(!0))}else addChatMessage("WebSocket is not connected.","error")}
 messageInput.addEventListener("input",function(){this.style.height="auto",this.style.height=this.scrollHeight+"px"}),messageInput.addEventListener("keypress",function(e){"Enter"===e.key&&!e.shiftKey&&(e.preventDefault(),sendMessage())}),connect();
