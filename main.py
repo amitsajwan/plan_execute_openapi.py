@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional, Callable, Awaitable
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.websockets import WebSocketState # Correct import for WebSocketState
 
 # Assuming models.py is in the same directory or accessible in PYTHONPATH
 from models import BotState
@@ -26,7 +27,7 @@ except ImportError as e:
     logging.critical(f"main.py: Failed to import APIExecutor or WorkflowExecutor: {e}. Ensure api_executor.py and workflow_executor.py are correct and accessible.")
     # Define basic placeholders if import fails, to allow the application to start with warnings.
     class APIExecutor:
-        def __init__(self, *args, **kwargs): 
+        def __init__(self, *args, **kwargs):
             logger.warning("Using placeholder APIExecutor due to import error.")
         async def close(self): logger.warning("Placeholder APIExecutor.close() called.")
     class WorkflowExecutor:
@@ -47,7 +48,7 @@ from langgraph.checkpoint.memory import MemorySaver # Using MemorySaver for simp
 
 # --- Logging Setup ---
 logging.basicConfig(
-    level=logging.INFO, 
+    level=logging.INFO,
     stream=sys.stdout,
     format='%(asctime)s - %(name)s - %(levelname)s - %(threadName)s - %(message)s'
 )
@@ -77,7 +78,7 @@ async def startup_event():
     logger.info("FastAPI startup: Initializing LLMs, API Executor, and building LangGraph app...")
     try:
         router_llm_instance, worker_llm_instance = initialize_llms()
-        
+
         api_executor_instance = APIExecutor(
             base_url=os.getenv("DEFAULT_API_BASE_URL"),
             timeout=float(os.getenv("API_TIMEOUT", 30.0))
@@ -107,7 +108,7 @@ async def shutdown_event():
             logger.info("APIExecutor client closed successfully.")
         except Exception as e:
             logger.error(f"Error closing APIExecutor client: {e}", exc_info=True)
-            
+
     # ... (other shutdown logic for checkpointer, SCHEMA_CACHE) ...
     from utils import SCHEMA_CACHE
     if SCHEMA_CACHE and hasattr(SCHEMA_CACHE, 'close'):
@@ -119,7 +120,8 @@ async def shutdown_event():
 async def send_ws_message(websocket: WebSocket, msg_type: str, content: Any, session_id: str):
     """Helper to send WebSocket messages with logging."""
     try:
-        if websocket.client_state == httpx. लेकिन_CLIENT_STATE.OPEN: # Check if socket is open
+        # Corrected WebSocket state check
+        if websocket.client_state == WebSocketState.CONNECTED:
             await websocket.send_json({"type": msg_type, "content": content})
             log_content_preview = str(content)
             if len(log_content_preview) > 150: log_content_preview = log_content_preview[:150] + "..."
@@ -189,7 +191,7 @@ async def websocket_endpoint(websocket: WebSocket):
             else:
                 logger.info(f"[{session_id}] No checkpoint. Initializing new BotState.")
                 current_bot_state_obj = BotState(session_id=session_id, user_input=user_input_text)
-            
+
             # Crucially, ensure scratchpad for the state going into langgraph_app is clean of complex objects
             # that core_logic might have put there in a previous partial run if an error occurred.
             # The 'workflow_executor_instance' should not be in the state passed to the main agent graph.
@@ -213,7 +215,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         elif isinstance(node_output_value, dict) and "session_id" in node_output_value:
                             try: current_bot_state_obj = BotState.model_validate(node_output_value)
                             except ValidationError as ve: logger.error(f"[{session_id}] Pydantic validation error for node '{event_name}' output: {ve}", exc_info=False)
-                        
+
                         if current_bot_state_obj:
                             if current_bot_state_obj.response:
                                 await send_ws_message(websocket, "intermediate", current_bot_state_obj.response, session_id)
@@ -221,13 +223,13 @@ async def websocket_endpoint(websocket: WebSocket):
                             if graph_json_to_send:
                                 try: await send_ws_message(websocket, "graph_update", json.loads(graph_json_to_send), session_id)
                                 except json.JSONDecodeError: logger.error(f"[{session_id}] Failed to parse graph_json_to_send for graph_update from '{event_name}'.")
-                    
+
                     if event_type == "on_graph_end":
                         final_output = event_data.get("output")
                         if final_output and isinstance(final_output, dict):
                              current_bot_state_obj = BotState.model_validate(final_output)
                         break
-                
+
                 if not current_bot_state_obj:
                     logger.error(f"[{session_id}] Main agent graph execution completed but current_bot_state_obj is not set.")
                     await send_ws_message(websocket, "error", "Critical error: Agent state lost after processing.", session_id)
@@ -266,12 +268,12 @@ async def websocket_endpoint(websocket: WebSocket):
                                 initial_extracted_data=current_bot_state_obj.workflow_extracted_data.copy()
                             )
                             active_workflow_executors[session_id] = wf_executor
-                            
+
                             async def wf_websocket_callback_adapter(event_type: str, data: Dict, wf_cb_session_id: str):
                                 await send_ws_message(websocket, f"workflow_{event_type}", data, wf_cb_session_id)
-                            
+
                             wf_executor.websocket_callback = wf_websocket_callback_adapter
-                            
+
                             current_bot_state_obj.workflow_execution_status = "running"
                             logger.info(f"[{session_id}] WorkflowExecutor created and stored. Starting run_workflow_streaming task.")
                             asyncio.create_task(wf_executor.run_workflow_streaming(thread_config=config))
@@ -314,7 +316,8 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e_outer_loop:
         logger.critical(f"[{session_id}] Unhandled error in WebSocket main loop: {e_outer_loop}", exc_info=True)
         try:
-            if websocket.client_state == httpx. लेकिन_CLIENT_STATE.OPEN:
+            # Corrected WebSocket state check
+            if websocket.client_state == WebSocketState.CONNECTED:
                 await send_ws_message(websocket, "error", f"Critical server error encountered: {str(e_outer_loop)[:200]}", session_id)
         except: pass
     finally:
@@ -327,7 +330,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 # await removed_executor.cleanup_session_resources()
                 pass
         try:
-            if websocket.client_state == httpx. लेकिन_CLIENT_STATE.OPEN: # Check before closing
+            # Corrected WebSocket state check
+            if websocket.client_state == WebSocketState.CONNECTED:
                  await websocket.close()
         except Exception as e_close:
             logger.warning(f"[{session_id}] Error during WebSocket close: {e_close}", exc_info=False)
@@ -344,4 +348,3 @@ async def get_index_page():
             status_code=404
         )
     return FileResponse(index_path)
-
