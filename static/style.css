@@ -1,215 +1,447 @@
 /* style.css */
-body { 
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
-    margin: 0; 
-    background-color: #f0f2f5; 
-    color: #333; 
-    display: flex; 
-    flex-direction: column; 
-    height: 100vh; 
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+    margin: 0;
+    background-color: #f4f6f8; /* Slightly lighter background */
+    color: #333;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
     line-height: 1.6;
+    font-size: 16px; /* Base font size */
 }
-.header { 
-    background-color: #4A90E2; 
-    color: white; 
-    padding: 15px 20px; 
-    text-align: center; 
-    font-size: 1.2em; 
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
-    flex-shrink: 0; /* Prevent header from shrinking */
-}
-.main-container { 
-    display: flex; 
-    flex-grow: 1; 
-    overflow: hidden; /* Important for child elements with overflow:auto */
-    padding: 10px; 
-    gap: 10px; 
-}
-.graph-view-container { 
-    width: 35%; 
-    min-width: 350px; 
-    max-width: 40%; 
-    background-color: #2d3748; 
-    color: #e2e8f0; 
-    padding: 15px; 
-    /* margin-right: 10px; */ /* Gap is handled by main-container */
-    border-radius: 8px; 
-    display: flex; 
-    flex-direction: column; 
-    overflow-y: auto; 
-    font-family: Menlo, Monaco, 'Courier New', monospace; 
-    font-size: 0.85em; 
-}
-.graph-view-container h2 { 
-    margin-top: 0; 
-    color: #90cdf4; 
-    border-bottom: 1px solid #4a5568; 
-    padding-bottom: 10px; 
+
+.header {
+    background-color: #3498db; /* A more vibrant blue */
+    color: white;
+    padding: 12px 20px; /* Slightly reduced padding */
+    text-align: center;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.15);
     flex-shrink: 0;
+    border-bottom: 3px solid #2980b9;
 }
-.tab-buttons { 
-    margin-bottom: 10px; 
-    flex-shrink: 0; 
-    display: flex; /* Added for button layout */
-    gap: 5px; /* Added space between buttons */
+.header h1 {
+    margin: 0;
+    font-size: 1.4em; /* Adjusted font size */
+    font-weight: 600;
 }
-.tab-buttons button { 
-    background-color: #4a5568; 
-    color: #e2e8f0; 
-    border: none; 
-    padding: 8px 12px; 
-    cursor: pointer; 
-    border-radius: 4px; 
-    /* margin-right: 5px; */ /* Replaced by gap in parent */
-    font-size: 0.9em; 
-    transition: background-color 0.2s ease;
+
+.main-container {
+    display: flex;
+    flex-grow: 1;
+    overflow: hidden;
+    padding: 15px; /* Increased padding */
+    gap: 15px; /* Increased gap */
+}
+
+/* Graph View Styling */
+.graph-view-container {
+    width: 40%; /* Slightly wider */
+    min-width: 400px;
+    max-width: 45%;
+    background-color: #2c3e50; /* Darker, more modern slate */
+    color: #ecf0f1; /* Lighter text for contrast */
+    padding: 20px;
+    border-radius: 10px; /* More rounded corners */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* Children will handle their own scroll */
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.graph-view-container h2 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #3498db; /* Consistent blue */
+    border-bottom: 2px solid #34495e; /* Subtler border */
+    padding-bottom: 10px;
+    font-size: 1.3em;
+    font-weight: 600;
+}
+.tab-buttons {
+    margin-bottom: 15px;
+    flex-shrink: 0;
+    display: flex;
+    gap: 8px;
+}
+.tab-buttons button {
+    background-color: #34495e; /* Darker tabs */
+    color: #ecf0f1;
+    border: none;
+    padding: 10px 15px; /* Larger click area */
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 0.95em;
+    font-weight: 500;
+    transition: background-color 0.2s ease, transform 0.1s ease;
 }
 .tab-buttons button:hover {
-    background-color: #5a6578;
+    background-color: #4a617a;
+    transform: translateY(-1px);
 }
-.tab-buttons button.active { 
-    background-color: #718096; 
+.tab-buttons button.active {
+    background-color: #3498db; /* Active tab matches header */
+    color: white;
     font-weight: bold;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 }
-.tab-content { 
-    display: none; 
-    flex-grow: 1; 
-    overflow-y: auto; 
-    background-color: #1a202c; 
-    border-radius: 4px; 
-    padding:10px; 
-}
-.tab-content.active { 
-    display: block; 
-}
-#graphJsonViewContent pre { /* Specific to JSON view pre */
-    margin: 0; 
-    background-color: transparent !important; 
-    color: #e2e8f0 !important; 
-    padding: 0 !important; 
-    white-space: pre-wrap; 
-    word-wrap: break-word;
-}
-#graphDagViewContent { 
-    display: flex; /* Changed from none to flex to allow mermaid to render */
-    justify-content: center; 
-    align-items: flex-start; /* Align top for potentially large diagrams */
-    overflow: auto; /* Allow scrolling for large DAGs */
-} 
-.mermaid svg { /* Ensure mermaid diagram scales and is visible */
-    max-width: 100%; 
-    height: auto; 
-    display: block; /* Remove extra space below SVG */
-    margin: 0 auto; /* Center if smaller than container */
-} 
-
-.chat-container { 
-    display: flex; 
-    flex-direction: column; 
-    flex-grow: 1; 
-    background-color: #fff; 
-    border-radius: 8px; 
-    box-shadow: 0 0 15px rgba(0,0,0,0.1); 
-    overflow: hidden; 
-}
-#messages { 
-    flex-grow: 1; 
-    padding: 20px; 
-    overflow-y: auto; 
-    border-bottom: 1px solid #e0e0e0;
-}
-.message { 
-    padding: 10px 15px; 
-    margin-bottom: 10px; 
-    border-radius: 18px; 
-    max-width: 85%; 
-    word-wrap: break-word; 
-    line-height: 1.5; 
-    font-size: 0.95em; 
-}
-.user { 
-    background-color: #007bff; 
-    color: white; 
-    align-self: flex-end; 
-    margin-left: 15%; 
-    border-bottom-right-radius: 5px; 
-}
-.agent { 
-    background-color: #e9ecef; 
-    color: #343a40; 
-    align-self: flex-start; 
-    margin-right: 15%; 
-    border-bottom-left-radius: 5px; 
-}
-.agent h4 { margin-top: 0; margin-bottom: 8px; color: #00529B; font-size: 1.1em; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-.agent h5 { margin-top: 0; margin-bottom: 6px; color: #333; font-size: 1.05em; }
-.agent h6 { margin-top: 0; margin-bottom: 4px; color: #555; font-size: 1em; }
-.agent ul { padding-left: 20px; margin-top: 5px; margin-bottom: 10px; list-style-type: disc; }
-.agent li { margin-bottom: 4px; }
-.agent p { margin-top: 0; margin-bottom: 10px; }
-.agent pre { margin-bottom: 10px; } 
-
-.error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; padding: 10px; }
-.info { background-color: #d4edda; color: #155724; font-style: italic; text-align: center; padding: 6px; font-size: 0.9em; border-radius: 8px; }
-.status { background-color: #fff3cd; color: #856404; font-style: italic; text-align: center; padding: 6px; font-size: 0.9em; border-radius: 8px; }
-.intermediate { background-color: #e0e0e0; color: #555; font-style: italic; font-size: 0.85em; margin-right: 30%; align-self: flex-start; border-radius: 12px; border-bottom-left-radius: 5px; }
-
-#inputArea { 
-    display: flex; 
-    padding: 15px; 
-    border-top: 1px solid #e0e0e0; 
-    background-color: #f8f9fa; 
-    flex-shrink: 0; 
-}
-textarea { 
-    flex-grow: 1; 
-    padding: 12px 15px; 
-    border-radius: 20px; 
-    border: 1px solid #ced4da; 
-    resize: none; 
-    min-height: 24px; 
-    max-height: 120px; 
-    overflow-y: auto; 
-    font-size: 1em; 
-    line-height: 1.5;
-}
-button { 
-    padding: 0 20px; 
-    margin-left: 10px; 
-    border: none; 
-    background-color: #007bff; 
-    color: white; 
-    border-radius: 20px; 
-    cursor: pointer; 
-    font-size: 1em; 
-    display: flex; 
-    align-items: center; 
-    justify-content: center;
-    height: 48px; 
-}
-button:hover { background-color: #0056b3; }
-.thinking-indicator { 
-    width: 18px; height: 18px; 
-    border: 3px solid hsla(210, 100%, 50%, 0.2); 
-    border-top-color: #007bff; 
-    border-radius: 50%; 
-    animation: spin 0.8s linear infinite; 
-    display: none; 
-    margin-left: 8px; 
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-button span { margin-right: 5px; }
-
-/* General pre/code styling, also affects graph view if not overridden */
-pre { 
-    background-color: #282c34; 
-    color: #e2e8f0; 
-    padding: 1em; 
-    border-radius: 6px; 
-    overflow-x: auto; 
-    white-space: pre-wrap; 
-    word-wrap: break-word;
-    font-family: Menlo, Monaco, 'Courier New', monospace;
+.tab-content {
+    display: none;
+    flex-grow: 1;
+    overflow-y: auto; /* Allow scrolling within tab content */
+    background-color: #1e2b37; /* Slightly darker content area */
+    border-radius: 6px;
+    padding: 15px;
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
     font-size: 0.9em;
 }
-code { font-family: Menlo, Monaco, 'Courier New', monospace; }
+.tab-content.active {
+    display: block;
+}
+#graphJsonViewContent pre {
+    margin: 0;
+    background-color: transparent !important;
+    color: #ecf0f1 !important;
+    padding: 0 !important;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+#graphDagViewContent {
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    overflow: auto; /* For large DAGs */
+}
+.mermaid svg {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+}
+/* Mermaid Node Status Styles (ensure these match classDef in script.js) */
+.mermaid .runningNode rect, .mermaid .runningNode polygon, .mermaid .runningNode ellipse { fill: #f6ad55 !important; stroke: #dd6b20 !important; color: #000 !important; }
+.mermaid .successNode rect, .mermaid .successNode polygon, .mermaid .successNode ellipse { fill: #48bb78 !important; stroke: #2f855a !important; }
+.mermaid .errorNode rect, .mermaid .errorNode polygon, .mermaid .errorNode ellipse { fill: #f56565 !important; stroke: #c53030 !important; }
+
+
+/* Chat Container Styling */
+.chat-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    background-color: #ffffff;
+    border-radius: 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    overflow: hidden;
+}
+#messages {
+    flex-grow: 1;
+    padding: 20px;
+    overflow-y: auto;
+    border-bottom: 1px solid #e0e0e0;
+}
+.message {
+    padding: 10px 15px;
+    margin-bottom: 12px; /* Increased margin */
+    border-radius: 18px;
+    max-width: 85%;
+    word-wrap: break-word;
+    line-height: 1.5;
+    font-size: 0.95em;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.message.user {
+    background-color: #3498db; /* Consistent blue */
+    color: white;
+    align-self: flex-end;
+    margin-left: auto; /* Pushes to the right */
+    border-bottom-right-radius: 6px;
+}
+.message.agent, .message.final, .message.intermediate, .message.status, .message.info, .message.warning {
+    background-color: #e9ecef;
+    color: #343a40;
+    align-self: flex-start;
+    margin-right: auto; /* Pushes to the left */
+    border-bottom-left-radius: 6px;
+}
+.message.error, .message.workflow-error, .message.error-modal {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+    padding: 10px 15px; /* Ensure padding is consistent */
+}
+.message.info, .message.workflow-info { background-color: #d1ecf1; color: #0c5460; border-color: #bee5eb;}
+.message.status { background-color: #fff3cd; color: #856404; border-color: #ffeeba;}
+.message.intermediate { font-style: italic; color: #555; background-color: #f0f0f0; }
+.message.workflow-success { background-color: #d4edda; color: #155724; border-color: #c3e6cb; }
+
+
+/* Message Formatting within Agent Responses */
+.message.agent h4, .message.final h4 { margin-top: 0; margin-bottom: 8px; color: #2980b9; font-size: 1.1em; border-bottom: 1px solid #bdc3c7; padding-bottom: 4px; }
+.message.agent h5, .message.final h5 { margin-top: 0; margin-bottom: 6px; color: #2c3e50; font-size: 1.05em; }
+.message.agent h6, .message.final h6 { margin-top: 0; margin-bottom: 4px; color: #34495e; font-size: 1em; }
+.message.agent ul, .message.final ul { padding-left: 20px; margin-top: 5px; margin-bottom: 10px; list-style-type: disc; }
+.message.agent li, .message.final li { margin-bottom: 4px; }
+.message.agent p, .message.final p { margin-top: 0; margin-bottom: 10px; }
+.message.agent pre, .message.final pre {
+    background-color: #2c3e50; /* Darker pre for agent messages */
+    color: #ecf0f1;
+    padding: 1em;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    font-size: 0.9em;
+    margin-bottom: 10px;
+}
+.message.agent code, .message.final code { font-family: inherit; background-color: rgba(0,0,0,0.05); padding: 2px 4px; border-radius: 3px;}
+.message.agent pre code { background-color: transparent; padding: 0; }
+
+
+/* Input Area Styling */
+#inputArea {
+    display: flex;
+    padding: 15px;
+    border-top: 1px solid #e0e0e0;
+    background-color: #f8f9fa;
+    flex-shrink: 0;
+    align-items: flex-end; /* Align items to bottom for multi-line textarea */
+}
+#messageInput {
+    flex-grow: 1;
+    padding: 12px 15px;
+    border-radius: 22px; /* More rounded */
+    border: 1px solid #ced4da;
+    resize: none;
+    min-height: 24px; /* For single line */
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 1em;
+    line-height: 1.5;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.06);
+}
+#messageInput:focus {
+    border-color: #3498db;
+    box-shadow: 0 0 0 0.2rem rgba(52, 152, 219, 0.25);
+    outline: none;
+}
+
+.button-group {
+    display: flex;
+    margin-left: 10px;
+    gap: 8px; /* Space between buttons */
+}
+
+#inputArea button { /* General style for buttons in inputArea */
+    padding: 0 20px;
+    border: none;
+    background-color: #3498db;
+    color: white;
+    border-radius: 22px;
+    cursor: pointer;
+    font-size: 1em;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 48px; /* Consistent height with textarea padding */
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+#inputArea button:hover {
+    background-color: #2980b9;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+}
+#inputArea button:disabled {
+    background-color: #a5c9e2;
+    cursor: not-allowed;
+    box-shadow: none;
+}
+#inputArea button span {
+    margin-right: 5px; /* Space before thinking indicator */
+}
+.thinking-indicator {
+    width: 18px; height: 18px;
+    border: 3px solid hsla(207, 70%, 50%, 0.2); /* Lighter border */
+    border-top-color: #ffffff; /* White spinner on blue button */
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    display: none;
+    margin-left: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+
+/* Workflow Log Specific Styling */
+.workflow-log-container {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid #34495e; /* Separator within graph view */
+    flex-shrink: 0; /* Don't let it shrink too much if graph view is small */
+    max-height: 200px; /* Limit height, make it scrollable */
+    overflow-y: auto;
+}
+.workflow-log-container h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #7f8c8d; /* Muted color for log title */
+    font-size: 0.9em;
+    text-transform: uppercase;
+}
+.workflow-messages { /* Container for individual log entries */
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    font-size: 0.85em;
+    color: #bdc3c7; /* Lighter text for logs */
+}
+.workflow-log-entry {
+    padding: 4px 0;
+    border-bottom: 1px dashed #34495e; /* Subtle separator for entries */
+    word-break: break-all;
+}
+.workflow-log-entry:last-child {
+    border-bottom: none;
+}
+.workflow-log-entry .log-timestamp {
+    color: #7f8c8d;
+    margin-right: 8px;
+    font-size: 0.9em;
+}
+.workflow-log-entry pre { /* Styling for JSON objects in logs */
+    background-color: #1c2833; /* Even darker for pre in logs */
+    padding: 5px;
+    border-radius: 4px;
+    margin-top: 3px;
+    white-space: pre-wrap;
+}
+.workflow-node_started { color: #f1c40f; } /* Yellowish for started */
+.workflow-node_execution_succeeded, .workflow-success { color: #2ecc71; } /* Green for success */
+.workflow-node_execution_failed, .workflow-error { color: #e74c3c; } /* Red for error */
+.workflow-interrupt_confirmation_required { color: #e67e22; font-weight: bold; } /* Orange for interrupt */
+.workflow-info { color: #3498db; } /* Blue for general info */
+.workflow-warning { color: #f39c12; } /* Amber for warnings */
+
+
+/* Modal Styling */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000; /* Ensure it's on top */
+    padding: 20px; /* Padding for smaller screens */
+    box-sizing: border-box;
+}
+.modal-content {
+    background-color: #ffffff;
+    padding: 25px 30px; /* More padding */
+    border-radius: 10px;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.25);
+    width: 100%;
+    max-width: 600px; /* Max width for the modal */
+    max-height: 90vh; /* Max height */
+    overflow-y: auto; /* Scroll if content overflows */
+    display: flex;
+    flex-direction: column;
+    gap: 15px; /* Space between elements in modal */
+}
+.modal-content h3 {
+    margin-top: 0;
+    margin-bottom: 10px; /* Reduced margin */
+    color: #2c3e50;
+    font-size: 1.4em;
+    border-bottom: 1px solid #e0e0e0;
+    padding-bottom: 10px;
+}
+.modal-content p {
+    margin: 5px 0;
+    color: #555;
+}
+.modal-content p strong {
+    color: #333;
+}
+.modal-content code {
+    background-color: #f0f0f0;
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    color: #c0392b; /* Make code distinct */
+}
+.payload-container {
+    margin-top: 10px;
+}
+.payload-container label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    color: #333;
+}
+#modalPayload {
+    width: 100%; /* Full width within modal padding */
+    box-sizing: border-box; /* Include padding and border in width */
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    font-size: 0.9em;
+    min-height: 150px; /* Good default height */
+    resize: vertical; /* Allow vertical resize */
+}
+.modal-actions {
+    margin-top: 20px;
+    display: flex;
+    justify-content: flex-end; /* Align buttons to the right */
+    gap: 12px;
+}
+.modal-actions button {
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 1em;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.modal-actions .button-primary {
+    background-color: #27ae60; /* Green for confirm */
+    color: white;
+    border: none;
+}
+.modal-actions .button-primary:hover {
+    background-color: #229954;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+.modal-actions .button-secondary {
+    background-color: #bdc3c7; /* Grey for cancel */
+    color: #2c3e50;
+    border: none;
+}
+.modal-actions .button-secondary:hover {
+    background-color: #95a5a6;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+}
+
+/* General pre/code styling if not overridden by specific message types */
+pre {
+    background-color: #282c34; /* Default dark pre */
+    color: #abb2bf;
+    padding: 1em;
+    border-radius: 6px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    font-size: 0.9em;
+}
+code {
+    font-family: 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+    background-color: rgba(0,0,0,0.04); /* Subtle background for inline code */
+    padding: 2px 5px;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+pre code { /* Reset for code inside pre */
+    background-color: transparent;
+    padding: 0;
+}
