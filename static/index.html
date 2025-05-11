@@ -5,9 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OpenAPI Agent (Gemini)</title>
     <link rel="stylesheet" href="/static/style.css">
-</head>
+    </head>
 <body>
-    <div class="header">OpenAPI Multi-view Agent (Gemini LLM)</div>
+    <div class="header">
+        <h1>OpenAPI Multi-view Agent (Gemini LLM)</h1>
+    </div>
     <div class="main-container">
         <div class="graph-view-container">
             <h2>Execution Graph</h2>
@@ -23,19 +25,55 @@
                     Graph not yet available or cannot be rendered.
                 </div>
             </div>
+            <div class="workflow-log-container">
+                <h4>Workflow Execution Log</h4>
+                <div id="workflowLogMessages" class="workflow-messages">
+                    </div>
+            </div>
         </div>
         <div class="chat-container">
-            <div id="messages"></div>
+            <div id="messages">
+                </div>
             <div id="inputArea">
                 <textarea id="messageInput" placeholder="Paste OpenAPI spec (JSON/YAML) or ask a question..." rows="1"></textarea>
-                <button id="sendButton" onclick="sendMessage()">
-                    <span>Send</span>
-                    <div class="thinking-indicator" id="thinkingIndicator"></div>
-                </button>
+                <div class="button-group">
+                    <button id="sendButton" onclick="sendMessage()" title="Send Message">
+                        <span>Send</span>
+                        <div class="thinking-indicator" id="thinkingIndicator"></div>
+                    </button>
+                    <button id="runWorkflowButton" onclick="runWorkflow()" title="Run Current Workflow">
+                        <span>Run Workflow</span>
+                        </button>
+                </div>
             </div>
         </div>
     </div>
+
+    <div id="workflowConfirmationModal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <h3 id="modalTitle">Confirm API Call</h3>
+            <p><strong>Operation:</strong> <span id="modalOperationId">N/A</span> (<span id="modalNodeId">N/A</span>)</p>
+            <p><strong>Method:</strong> <span id="modalMethod">N/A</span></p>
+            <p><strong>Path:</strong> <code id="modalPath">N/A</code></p>
+            <div class="payload-container">
+                <label for="modalPayload"><strong>Request Payload (JSON):</strong></label>
+                <textarea id="modalPayload" rows="10" placeholder="Enter JSON payload here..."></textarea>
+            </div>
+            <div class="modal-actions">
+                <button id="modalConfirmButton" class="button-primary">Confirm & Proceed</button>
+                <button id="modalCancelButton" class="button-secondary" onclick="hideWorkflowConfirmationModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        // Initialize Mermaid.js - it's good to do this after the library loads
+        // and before script.js tries to use it, though script.js also checks for `typeof mermaid`.
+        if (typeof mermaid !== 'undefined') {
+            mermaid.initialize({ startOnLoad: false, theme: 'neutral' }); // 'neutral' or 'dark' or 'forest'
+        }
+    </script>
     <script src="/static/script.js"></script>
 </body>
 </html>
