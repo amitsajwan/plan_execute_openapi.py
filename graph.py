@@ -8,8 +8,17 @@ from langgraph.checkpoint.base import BaseCheckpointSaver # For type hinting che
 # Assuming models.py is in the same directory or accessible in PYTHONPATH
 from models import BotState
 # Assuming core_logic.py and router.py are accessible
-from core_logic import OpenAPICoreLogic, APIExecutor # Import APIExecutor for type hint
+from core_logic import OpenAPICoreLogic
 from router import OpenAPIRouter
+
+# For type hinting the api_executor_instance parameter in build_graph
+# Assuming APIExecutor is defined in workflow_executor.py as per recent updates
+try:
+    from workflow_executor import APIExecutor
+except ImportError:
+    logging.warning("graph.py: Could not import APIExecutor from workflow_executor.py for type hinting. Using Any.")
+    APIExecutor = Any # Fallback type
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,47 +28,48 @@ def finalize_response(state: BotState) -> BotState:
     and prepares the state for ending the current graph turn.
     """
     tool_name = "responder"
-    logger.info(f"Responder ({tool_name}): Entered. Current state.response = '{state.response}', current state.final_response = '{state.final_response}'")
-    state.update_scratchpad_reason(tool_name, f"Finalizing response. Initial state.response: '{state.response}'")
+    # Log entry point with current response values for debugging
+    logger.info(f"Responder ({tool_name}): Entered. state.response='{str(state.response)[:100]}...', state.final_response='{str(state.final_response)[:100]}...'")
+    state.update_scratchpad_reason(tool_name, f"Finalizing response. Initial state.response: '{str(state.response)[:100]}...'")
     
     if state.response: # If an intermediate response was set by the last node
         state.final_response = state.response
-        logger.info(f"Responder ({tool_name}): Set final_response from state.response: '{state.final_response[:200]}...'")
-    elif not state.final_response: # Only set a default if final_response isn't already set (e.g., by a direct error)
+        logger.info(f"Responder ({tool_name}): Set final_response from state.response: '{str(state.final_response)[:200]}...'")
+    elif not state.final_response: # Only set a default if final_response isn't already set (e.g., by an error message directly in BotState)
         state.final_response = "Processing complete. How can I help you further?"
         logger.warning(f"Responder ({tool_name}): state.response was empty/None. Using default final_response: '{state.final_response}'")
     else:
-        # This case means state.response was falsey, but state.final_response already had a value (e.g. from a previous turn's error).
-        logger.info(f"Responder ({tool_name}): state.response was falsey, but final_response was already set to: '{state.final_response[:200]}...'. No change to final_response.")
+        # This case means state.response was falsey, but state.final_response already had a value.
+        logger.info(f"Responder ({tool_name}): state.response was falsey, but final_response was already set. No change to final_response: '{str(state.final_response)[:200]}...'")
 
-    # Clear fields for the next turn
-    state.response = None # Clear intermediate response
-    state.next_step = None # Clear routing directive from the previous node
-    state.intent = None # Clear current intent
-    # state.user_input is typically cleared or updated by the main loop receiving new input.
+    # Clear fields for the next turn to avoid carry-over issues
+    state.response = None         # Clear intermediate response
+    state.next_step = None      # Clear routing directive from the previous node
+    state.intent = None         # Clear current intent, will be re-evaluated by router on new input
+    # state.user_input is typically updated by the main loop receiving new input.
+    # Scratchpad items like 'graph_to_send' are managed by the nodes that set them.
 
-    state.update_scratchpad_reason(tool_name, f"Final response set in state: {state.final_response[:200]}...")
-    logger.info(f"Responder ({tool_name}): Exiting. state.final_response = '{state.final_response}', state.response = '{state.response}'")
+    state.update_scratchpad_reason(tool_name, f"Final response set in state: {str(state.final_response)[:200]}...")
+    logger.info(f"Responder ({tool_name}): Exiting. state.final_response='{str(state.final_response)[:100]}...', state.response='{state.response}'")
     return state
 
 
-# Modified to accept api_executor_instance
 def build_graph(
     router_llm: Any,
     worker_llm: Any,
-    api_executor_instance: APIExecutor, # Added
+    api_executor_instance: APIExecutor, # Modified: Added api_executor_instance
     checkpointer: BaseCheckpointSaver
 ) -> StateGraph:
     """Builds and compiles the LangGraph StateGraph for the OpenAPI agent."""
-    logger.info("Building LangGraph graph...")
+    logger.info("Building LangGraph graph with APIExecutor integration...")
 
-    # Instantiate core logic and router, passing the api_executor
+    # Instantiate core logic, passing the api_executor_instance
     core_logic = OpenAPICoreLogic(worker_llm=worker_llm, api_executor_instance=api_executor_instance)
     router_instance = OpenAPIRouter(router_llm=router_llm)
 
     builder = StateGraph(BotState)
 
-    # --- Add Nodes ---
+    # --- Add All Nodes ---
     # Router node
     builder.add_node("router", router_instance.route)
 
@@ -73,14 +83,14 @@ def build_graph(
     builder.add_node("get_graph_json", core_logic.get_graph_json)
     builder.add_node("answer_openapi_query", core_logic.answer_openapi_query)
     
-    # Interactive processing nodes
+    # Interactive processing nodes (these call other core_logic methods internally)
     builder.add_node("interactive_query_planner", core_logic.interactive_query_planner)
     builder.add_node("interactive_query_executor", core_logic.interactive_query_executor)
 
-    # Workflow execution setup node (called by router or interactive_query_executor)
-    # The actual execution happens via WorkflowExecutor, managed by main.py loop after this setup.
+    # New node for setting up workflow execution
     builder.add_node("setup_workflow_execution", core_logic.setup_workflow_execution)
-    # resume_workflow_with_payload is called by interactive_query_executor, not a direct graph node from router.
+    # Note: resume_workflow_with_payload is an internal action called by interactive_query_executor,
+    # not a direct node from the main router.
 
     # Handling nodes
     builder.add_node("handle_unknown", core_logic.handle_unknown)
@@ -90,77 +100,84 @@ def build_graph(
     builder.add_node("responder", finalize_response)
 
     # --- Define Edges ---
-    # Entry point
+    # Entry point of the graph
     builder.add_edge(START, "router")
 
     # Conditional edges from the router based on determined intent
-    # The OpenAPIRouter.AVAILABLE_INTENTS Literal includes all valid node names
-    # that the router can directly decide to go to.
-    router_conditional_edges: Dict[str, str] = {
-        # Maps intent value to the node name (usually the same)
+    # OpenAPIRouter.AVAILABLE_INTENTS should list all valid node names the router can target.
+    router_targetable_intents = {
         intent_val: intent_val for intent_val in OpenAPIRouter.AVAILABLE_INTENTS.__args__ # type: ignore
+        if intent_val in builder.nodes # Ensure the intent name corresponds to an added node
     }
-    # Remove intents that are not direct graph nodes or are handled internally by other nodes
-    # For example, interactive_query_executor is a node, but its sub-actions are internal to core_logic.
-    # 'process_schema_pipeline' is a valid node.
-    # '_generate_execution_graph' is a valid node.
-    # 'resume_workflow_with_payload' is handled within interactive_query_executor.
-
-    # Ensure all keys in router_conditional_edges are actual nodes added to the builder.
-    # This is implicitly checked by LangGraph at compile time if an edge points to a non-existent node.
+    # Log if any intents defined in router are not actual graph nodes
+    for intent_val in OpenAPIRouter.AVAILABLE_INTENTS.__args__: # type: ignore
+        if intent_val not in router_targetable_intents:
+            logger.warning(f"Router intent '{intent_val}' is defined in AVAILABLE_INTENTS but not added as a node in the graph. It cannot be routed to directly by the router.")
 
     builder.add_conditional_edges(
         "router", # Source node
         lambda state: state.intent, # Function that returns the key for the conditional edge
-        router_conditional_edges # Mapping from key to target node name
+        router_targetable_intents # Mapping from intent key to target node name
     )
 
     # Define how nodes that set 'state.next_step' should be routed
     def route_from_internal_node_state(state: BotState) -> str:
         """Determines the next node based on state.next_step set by an internal node."""
         next_node_name = state.next_step
+        current_node_info = state.intent or "Unknown (routing from internal node)" # Use intent as proxy for current node if available
+
         if not next_node_name:
-            # This should ideally not happen if nodes always set a next_step or default to responder
-            logger.warning(f"Node (intent: {state.intent or 'Unknown'}) did not set state.next_step. Defaulting to 'responder'.")
+            logger.warning(f"Node '{current_node_info}' did not set state.next_step. Defaulting to 'responder'.")
             return "responder"
         
-        logger.debug(f"Routing from internal node. Previous intent: '{state.intent}', Next step decided by node: '{next_node_name}'")
+        if next_node_name not in builder.nodes:
+            logger.error(f"Node '{current_node_info}' tried to route to non-existent node '{next_node_name}'. Defaulting to 'handle_unknown'.")
+            return "handle_unknown" # Or 'responder'
+            
+        logger.debug(f"Routing from internal node '{current_node_info}'. Next step decided by node: '{next_node_name}'")
         return next_node_name
 
     # List all nodes that are expected to set 'state.next_step' to guide their own routing
+    # These are nodes that perform an action and then decide where to go next.
     nodes_that_set_next_step = [
         "parse_openapi_spec", "process_schema_pipeline", "_generate_execution_graph",
         "verify_graph", "refine_api_graph", "describe_graph", "get_graph_json",
         "answer_openapi_query", "interactive_query_planner", "interactive_query_executor",
         "setup_workflow_execution", # This node will set next_step = "responder"
         "handle_unknown", "handle_loop"
-        # 'router' is handled by its own conditional_edges based on 'intent'
-        # 'responder' goes to END
+        # 'router' is handled by its own conditional_edges based on 'state.intent'
+        # 'responder' always goes to END
     ]
 
-    # Create a mapping for all possible target nodes from these internal nodes
-    # This includes all nodes in the graph as potential targets.
-    all_possible_internal_targets: Dict[str, str] = {
+    # Create a mapping for all possible target nodes from these internal nodes.
+    # This ensures that any node name set in state.next_step can be routed to if it exists.
+    all_graph_nodes_as_targets: Dict[str, str] = {
         node_name: node_name for node_name in builder.nodes # builder.nodes gives all added node names
     }
-    if "router" not in all_possible_internal_targets: all_possible_internal_targets["router"] = "router" # Ensure router is a target
-    if "responder" not in all_possible_internal_targets: all_possible_internal_targets["responder"] = "responder" # Ensure responder is a target
+    # Ensure critical fallback nodes are in the target map, though builder.nodes should include them.
+    if "responder" not in all_graph_nodes_as_targets: all_graph_nodes_as_targets["responder"] = "responder"
+    if "handle_unknown" not in all_graph_nodes_as_targets: all_graph_nodes_as_targets["handle_unknown"] = "handle_unknown"
 
 
-    for node_name in nodes_that_set_next_step:
-        if node_name in builder.nodes: # Ensure the source node itself was added
+    for source_node_name in nodes_that_set_next_step:
+        if source_node_name in builder.nodes: # Ensure the source node itself was added
             builder.add_conditional_edges(
-                node_name,
-                route_from_internal_node_state,
-                all_possible_internal_targets # Any node can be a target if specified by state.next_step
+                source_node_name,
+                route_from_internal_node_state, # Function to get the next node key
+                all_graph_nodes_as_targets # Mapping of possible next_step values to target nodes
             )
         else:
-            logger.error(f"Configuration error: Node '{node_name}' listed in 'nodes_that_set_next_step' was not added to the graph builder.")
+            # This would be a configuration error in the list 'nodes_that_set_next_step'
+            logger.error(f"Configuration error: Node '{source_node_name}' listed in 'nodes_that_set_next_step' was not added to the graph builder.")
 
-    # Terminal edge
+    # Terminal edge: all paths eventually lead to the responder, which then goes to END
     builder.add_edge("responder", END)
 
     # Compile the graph
-    app = builder.compile(checkpointer=checkpointer)
-    logger.info("LangGraph graph compiled successfully with checkpointer.")
-    return app
+    try:
+        app = builder.compile(checkpointer=checkpointer)
+        logger.info("LangGraph graph compiled successfully with checkpointer.")
+        return app
+    except Exception as e:
+        logger.critical(f"LangGraph compilation failed: {e}", exc_info=True)
+        raise # Re-raise the exception to prevent app startup with a broken graph
