@@ -114,12 +114,17 @@ class BotState(BaseModel):
     graph_regeneration_reason: Optional[str] = Field(None, description="Feedback for why graph needs regeneration/refinement.")
 
     # Workflow Execution State Fields
-    workflow_execution_status: Literal["idle", "running", "paused_for_confirmation", "completed", "failed"] = Field("idle", description="Status of the current workflow execution.")
-    workflow_execution_results: Dict[str, Any] = Field(default_factory=dict, description="Stores results from executed nodes, keyed by node effective_id.")
+    workflow_execution_status: Literal[
+        "idle",
+        "pending_start", # Added this status
+        "running",
+        "paused_for_confirmation",
+        "completed",
+        "failed"
+    ] = Field("idle", description="Status of the current workflow execution.")
+    workflow_execution_results: Dict[str, Any] = Field(default_factory=dict, description="Stores results from executed nodes, keyed by node effective_id.") # Consider if this should be a list of logs instead
     workflow_extracted_data: Dict[str, Any] = Field(default_factory=dict, description="Shared data pool extracted from node responses, used as input for subsequent nodes.")
-    # current_workflow_executor_id: Optional[str] = Field(None, description="Identifier for the active workflow executor instance, if needed for managing multiple.")
-    # The executor instance itself might be stored in scratchpad if needed across turns for a session
-
+    
     # Routing and Control Flow
     intent: Optional[str] = Field(None, description="User's high-level intent from router.")
     loop_counter: int = Field(0, description="Counter for detecting routing loops.")
@@ -136,7 +141,7 @@ class BotState(BaseModel):
     scratchpad: Dict[str, Any] = Field(default_factory=dict, description="Persistent memory for intermediate results, logs, workflow executor instances, etc.")
 
     class Config:
-        extra = 'allow' # Allow extra fields for flexibility (like storing executor instance)
+        extra = 'allow' 
         validate_assignment = True
         populate_by_name = True
 
