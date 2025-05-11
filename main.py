@@ -4,7 +4,7 @@ import uuid
 import json
 import os
 import sys
-from typing import Any, Dict, Optional, Tuple, List # Added List 
+from typing import Any, Dict, Optional, Tuple, List 
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse 
@@ -13,6 +13,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from models import BotState 
 from graph import build_graph 
 from pydantic import ValidationError 
+from llm_config import initialize_llms # <--- IMPORT initialize_llms
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -22,95 +23,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --- LLM Initialization ---
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    logger.info(".env file loaded if present.")
-except ImportError:
-    logger.warning("python-dotenv not installed. Cannot load .env file.")
-
-class PlaceholderLLM:
-    def __init__(self, name="PlaceholderLLM", delay=0.01): 
-        self.name = name
-        self.delay = delay
-        logger.warning(f"Initialized {self.name}. This is a fallback if real LLMs fail.")
-
-    def _generate_simulated_response(self, prompt_str: str) -> str:
-        prompt_lower = prompt_str.lower() # For case-insensitive checks
-
-        if "summarize this openapi specification" in prompt_lower:
-            return "This is a simulated API summary from PlaceholderLLM."
-        
-        if "design an api execution graph" in prompt_lower or \
-           "critique and refine the following api execution graph" in prompt_lower:
-            
-            graph_data = {
-                "nodes": [], 
-                "edges": [], 
-                "description": "Placeholder graph: Default workflow.",
-                "refinement_summary": "Initial version by PlaceholderLLM."
-            }
-            # Add a simple valid node if not an error case for graph generation
-            if "design an api execution graph" in prompt_lower and \
-               "cannot generate graph: no apis identified" not in prompt_lower:
-                graph_data["nodes"].append(
-                    {"operationId": "placeholderOp1", "summary": "Placeholder Op 1", 
-                     "description":"First placeholder step", 
-                     "payload_description":"Req: data. Resp: result", "input_mappings":[]}
-                )
-            if "critique and refine" in prompt_lower:
-                 graph_data["description"] = "Refined placeholder graph."
-                 graph_data["refinement_summary"] = "Placeholder made some refinements."
-                 if not graph_data["nodes"]: # Ensure nodes list exists
-                     graph_data["nodes"].append(
-                         {"operationId": "placeholderOp1Refined", "summary": "Refined Placeholder Op 1", 
-                          "description":"Refined first step", 
-                          "payload_description":"Req: data. Resp: result", "input_mappings":[]}
-                     )
-            return json.dumps(graph_data)
-
-        if "classify the user's intent" in prompt_lower: 
-            if "focus on" in prompt_lower or "what if" in prompt_lower: return "interactive_query_planner"
-            return "answer_openapi_query"
-        if "plans internal actions" in prompt_lower: 
-            return json.dumps({
-                "user_query_understanding": "User wants info on 'someItem' (Placeholder).",
-                "interactive_action_plan": [{"action_name": "answer_query_directly", "action_params": {"query_for_synthesizer": "About someItem"}, "description":"Answer about someItem"}]})
-        if "determine the user's high-level intent" in prompt_lower: # Fallback router prompt
-            if "graph" in prompt_lower: return "describe_graph"
-            return "answer_openapi_query"
-            
-        return f"Simulated response from {self.name} for prompt starting with: {prompt_str[:60]}..."
-
-    def invoke(self, prompt: Any, **kwargs) -> Any:
-        prompt_str = str(prompt); 
-        # logger.debug(f"{self.name} received prompt (first 100 chars): {prompt_str[:100]}...")
-        response_text = self._generate_simulated_response(prompt_str)
-        # logger.debug(f"{self.name} generated response (first 100 chars): {response_text[:100]}...")
-        class ContentWrapper: 
-            def __init__(self, text): 
-                self.content = text
-        return ContentWrapper(response_text)
-
-    async def ainvoke(self, prompt: Any, **kwargs) -> Any:
-        import asyncio; await asyncio.sleep(self.delay); return self.invoke(prompt, **kwargs)
-
-def initialize_llms() -> Tuple[Any, Any]:
-    logger.info("Initializing LLMs (Google Gemini)...")
-    google_api_key = os.getenv("GOOGLE_API_KEY")
-    router_llm, worker_llm = None, None
-    if google_api_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            router_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash-latest", temperature=0, google_api_key=google_api_key, convert_system_message_to_human=True)
-            worker_llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro-latest", temperature=0.1, google_api_key=google_api_key, convert_system_message_to_human=True)
-            logger.info("Gemini LLMs initialized: Router (Flash), Worker (Pro).")
-        except Exception as e: logger.error(f"Failed to init Gemini: {e}", exc_info=True)
-    else: logger.warning("GOOGLE_API_KEY not set.")
-    if not router_llm: router_llm = PlaceholderLLM("RouterLLM_Fallback"); logger.warning("Using Placeholder Router LLM.")
-    if not worker_llm: worker_llm = PlaceholderLLM("WorkerLLM_Fallback"); logger.warning("Using Placeholder Worker LLM.")
-    return router_llm, worker_llm
+# --- LLM Initialization (Moved to llm_config.py) ---
+# PlaceholderLLM class is also now in llm_config.py
 
 app = FastAPI()
 langgraph_app: Optional[Any] = None
@@ -121,7 +35,8 @@ async def startup_event():
     global langgraph_app
     logger.info("FastAPI startup: Initializing LLMs and building LangGraph app...")
     try:
-        router_llm_instance, worker_llm_instance = initialize_llms()
+        # initialize_llms is now imported from llm_config
+        router_llm_instance, worker_llm_instance = initialize_llms() 
         langgraph_app = build_graph(router_llm_instance, worker_llm_instance, checkpointer)
         logger.info("LangGraph application retrieved (compiled in build_graph).")
     except Exception as e:
@@ -134,7 +49,7 @@ async def shutdown_event():
     if hasattr(checkpointer, 'close'):
         try: checkpointer.close(); logger.info("Checkpointer closed.") # type: ignore
         except Exception as e: logger.error(f"Error closing checkpointer: {e}")
-    from utils import SCHEMA_CACHE
+    from utils import SCHEMA_CACHE # utils.py still handles schema caching
     if SCHEMA_CACHE:
         try: SCHEMA_CACHE.close(); logger.info("Schema cache closed.")
         except Exception as e: logger.error(f"Error closing schema cache: {e}")
@@ -187,63 +102,72 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.debug(f"[{session_id}] No checkpoint. New state.")
                 initial_state_for_turn = BotState(session_id=session_id, user_input=user_input)
 
-            current_turn_final_state: Optional[BotState] = None # To store the state after the responder runs
+            current_turn_final_state: Optional[BotState] = None 
             
-            if initial_state_for_turn.scratchpad: # Clear graph_to_send at start of turn
+            if initial_state_for_turn.scratchpad:
                  initial_state_for_turn.scratchpad.pop('graph_to_send', None)
 
             try:
                 if langgraph_app is None: raise RuntimeError("Agent not available.")
                 
+                all_node_outputs_in_turn: List[Dict[Any, Any]] = []
+
                 async for stream_event in langgraph_app.astream_events(initial_state_for_turn, config=config, version="v1"): 
                     event_type, event_data, event_name = stream_event["event"], stream_event["data"], stream_event.get("name", "unknown_node")
                     
-                    # The 'output' of on_chain_end/on_tool_end for a StateGraph node is the full state dict
                     if event_type in ("on_chain_end", "on_tool_end"):
-                        node_output_dict = event_data.get("output") 
-                        
-                        if isinstance(node_output_dict, dict) and "session_id" in node_output_dict:
-                            try:
-                                current_node_state = BotState.model_validate(node_output_dict)
-                                # Update current_turn_final_state with the state from the latest completed node
-                                current_turn_final_state = current_node_state 
-                                
-                                if current_node_state.response: 
-                                    logger.debug(f"[{session_id}] Node '{event_name}' intermediate: {current_node_state.response[:100]}...")
-                                    await websocket.send_json({"type": "intermediate", "content": current_node_state.response})
-                                    # The node itself should manage clearing its 'response' if it's purely transient.
-                                    # Or, rely on responder to set final_response and clear response.
+                        output_val = event_data.get("output") 
+                        if output_val is None and "outputs" in event_data: 
+                            output_val = event_data.get("outputs")
 
-                                graph_json_to_send = current_node_state.scratchpad.pop('graph_to_send', None)
+                        logger.debug(f"[{session_id}] Node '{event_name}' output_val type: {type(output_val)}, content: {str(output_val)[:300]}...")
+
+                        if isinstance(output_val, dict) and "session_id" in output_val:
+                            try:
+                                node_state = BotState.model_validate(output_val)
+                                all_node_outputs_in_turn.append(output_val) 
+                                
+                                if node_state.response: 
+                                    logger.debug(f"[{session_id}] Node '{event_name}' intermediate: {node_state.response[:100]}...")
+                                    await websocket.send_json({"type": "intermediate", "content": node_state.response})
+
+                                graph_json_to_send = node_state.scratchpad.pop('graph_to_send', None)
                                 if graph_json_to_send:
                                     logger.info(f"[{session_id}] Sending graph_update from node '{event_name}'.")
                                     await websocket.send_json({"type": "graph_update", "content": json.loads(graph_json_to_send)}) 
                             except ValidationError as e_val: 
-                                logger.error(f"[{session_id}] Pydantic state validation error for node '{event_name}': {e_val}. Data tried: {str(node_output_dict)[:300]}", exc_info=False)
+                                logger.error(f"[{session_id}] Pydantic state validation error for node '{event_name}': {e_val}. Data tried: {str(output_val)[:300]}", exc_info=False)
                             except Exception as e_proc: 
-                                logger.error(f"[{session_id}] Error processing output of node '{event_name}': {e_proc}. Data: {str(node_output_dict)[:300]}", exc_info=True)
-                        elif node_output_dict is not None: 
-                             logger.warning(f"[{session_id}] Node '{event_name}' output was not None and not a direct BotState dict. Type: {type(node_output_dict)}, Output: {str(node_output_dict)[:300]}")
+                                logger.error(f"[{session_id}] Error processing output of node '{event_name}': {e_proc}. Data: {str(output_val)[:300]}", exc_info=True)
+                        elif output_val is not None: 
+                             logger.warning(f"[{session_id}] Node '{event_name}' output was not None and not a direct BotState dict. Type: {type(output_val)}, Output: {str(output_val)[:300]}")
                 
-                logger.info(f"[{session_id}] Stream finished. current_turn_final_state available: {current_turn_final_state is not None}")
-                if current_turn_final_state: 
-                    logger.info(f"[{session_id}] current_turn_final_state.final_response: '{current_turn_final_state.final_response}'")
-                    logger.info(f"[{session_id}] current_turn_final_state.response (after responder): '{current_turn_final_state.response}'")
+                if all_node_outputs_in_turn:
+                    try:
+                        current_turn_final_state = BotState.model_validate(all_node_outputs_in_turn[-1])
+                        logger.info(f"[{session_id}] Stream finished. Final snapshot from last node output. Valid: {current_turn_final_state is not None}")
+                    except ValidationError as e:
+                        logger.error(f"[{session_id}] Failed to validate the very last node output as BotState: {e}. Last output dict: {all_node_outputs_in_turn[-1] if all_node_outputs_in_turn else 'None'}")
+                        current_turn_final_state = None 
+                else:
+                    logger.warning(f"[{session_id}] Stream finished, but no node outputs were collected to form a final_state_snapshot.")
 
-                if current_turn_final_state and current_turn_final_state.final_response:
-                    logger.info(f"[{session_id}] Sending final: {current_turn_final_state.final_response[:100]}...")
-                    await websocket.send_json({"type": "final", "content": current_turn_final_state.final_response})
+                if current_turn_final_state: 
+                    logger.info(f"[{session_id}] Snapshot final_response: '{current_turn_final_state.final_response}' (responder should have set this)")
+                    if current_turn_final_state.final_response:
+                        logger.info(f"[{session_id}] Sending final: {current_turn_final_state.final_response[:100]}...")
+                        await websocket.send_json({"type": "final", "content": current_turn_final_state.final_response})
+                    else: 
+                        fallback_msg = "Processing complete, but no specific message was generated by the agent."
+                        if current_turn_final_state.response: 
+                            fallback_msg = current_turn_final_state.response 
+                            logger.warning(f"[{session_id}] No final_response, using last intermediate response from snapshot: {fallback_msg[:100]}...")
+                        else:
+                             logger.error(f"[{session_id}] No final_response or intermediate response in final snapshot for user.")
+                        await websocket.send_json({"type": "error", "content": fallback_msg})
                 else: 
-                    fallback_msg = "Processing complete, but no specific message was generated by the agent."
-                    if current_turn_final_state and current_turn_final_state.response: 
-                        fallback_msg = current_turn_final_state.response 
-                        logger.warning(f"[{session_id}] No final_response, using last intermediate response from snapshot: {fallback_msg[:100]}...")
-                    elif initial_state_for_turn.response: 
-                        fallback_msg = initial_state_for_turn.response
-                        logger.warning(f"[{session_id}] No final_response, using response from initial state for turn: {fallback_msg[:100]}...")
-                    else:
-                        logger.error(f"[{session_id}] No final_response or any response in final/initial state snapshot for user.")
-                    await websocket.send_json({"type": "error", "content": fallback_msg})
+                    logger.error(f"[{session_id}] No valid final_state_snapshot after stream. Using initial_state_for_turn.response if available.")
+                    await websocket.send_json({"type": "error", "content": initial_state_for_turn.response or "Processing failed to produce a final state."})
 
             except Exception as e_graph:
                 logger.critical(f"[{session_id}] LangGraph error: {e_graph}", exc_info=True)
