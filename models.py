@@ -9,11 +9,18 @@ logger = logging.getLogger(__name__)
 # --- Graph Representation Models ---
 class InputMapping(BaseModel):
     """Defines how to map data from a source node's output to a target node's input."""
-    source_operation_id: str = Field(..., description="Effective_id of the source node providing data.")
-    source_data_path: str = Field(..., description="JSONPath-like string to extract data from source node's typical response (e.g., '$.id', '$.data.items[0].name').")
+    source_operation_id: str = Field(..., description="Effective_id of the source node providing data (can be a general key if data is in a shared pool).")
+    source_data_path: str = Field(..., description="JSONPath-like string to extract data (e.g., '$.id', '$.data.items[0].name', '$.extracted_key_name'). Assumes data is in a shared pool accessible by this path.")
     target_parameter_name: str = Field(..., description="Name of the parameter/field in the current node's operation.")
-    target_parameter_in: Literal["path", "query", "header", "cookie", "body", "body.fieldName"] = Field(..., description="Location of the target parameter (e.g., 'path', 'query', 'body.fieldName' for nested body fields).")
-    transformation: Optional[str] = Field(None, description="Optional instruction for transforming data (e.g., 'format as date string').")
+    target_parameter_in: Literal["path", "query", "header", "cookie", "body", "body.fieldName"] = Field(..., description="Location of the target parameter.")
+    transformation: Optional[str] = Field(None, description="Optional instruction for transforming data (e.g., 'format as date string'). Placeholder for future.")
+
+class OutputMapping(BaseModel):
+    """Defines how to extract data from a node's response and where to store it."""
+    source_data_path: str = Field(..., description="JSONPath-like string to extract data from the node's JSON response body (e.g., '$.id', '$.data.token').")
+    target_data_key: str = Field(..., description="The key under which the extracted data will be stored in the shared 'extracted_data' pool for subsequent nodes.")
+    # common_model_field: Optional[str] = Field(None, description="Optional: If this output corresponds to a known field in a common data model (e.g., 'user_id', 'product_id').")
+
 
 class Node(BaseModel):
     """Represents a node (an API call) in the execution graph."""
@@ -21,11 +28,21 @@ class Node(BaseModel):
     display_name: Optional[str] = Field(None, description="Unique name for this node instance if operationId is reused (e.g., 'getUser_step1').")
     summary: Optional[str] = Field(None, description="Short summary of the API operation.")
     description: Optional[str] = Field(None, description="Detailed description of this step's purpose in the workflow.")
-    payload_description: Optional[str] = Field(None, description="Natural language description of an example request payload and expected response structure for this API call.")
-    input_mappings: List[InputMapping] = Field(default_factory=list, description="How data from previous nodes maps to this node's inputs.")
+    
+    # Fields required for execution
+    method: Optional[str] = Field(None, description="HTTP method for the API call (e.g., GET, POST). Populated during graph generation or API identification.")
+    path: Optional[str] = Field(None, description="API path template (e.g., /users/{userId}). Populated during graph generation or API identification.")
+    payload_description: Optional[str] = Field(None, description="Natural language description of an example request payload and expected response structure. Can also be a JSON string template.")
+    
+    input_mappings: List[InputMapping] = Field(default_factory=list, description="How data from previous nodes or a shared pool maps to this node's inputs.")
+    output_mappings: List[OutputMapping] = Field(default_factory=list, description="How to extract data from this node's response into a shared pool.")
+    
+    requires_confirmation: bool = Field(False, description="If true, workflow should interrupt for user confirmation before executing this node (e.g., for POST, PUT, DELETE).")
+
     # Optional: Store structured parameter/request body info if LLM generates it
-    parameters_schema: Optional[List[Dict[str, Any]]] = Field(None, description="Schema of parameters for this operation, if detailed by LLM.")
-    request_body_schema: Optional[Dict[str, Any]] = Field(None, description="Schema of the request body for this operation, if detailed by LLM.")
+    # parameters_schema: Optional[List[Dict[str, Any]]] = Field(None, description="Schema of parameters for this operation, if detailed by LLM.")
+    # request_body_schema: Optional[Dict[str, Any]]] = Field(None, description="Schema of the request body for this operation, if detailed by LLM.")
+
 
     @property
     def effective_id(self) -> str:
@@ -36,7 +53,7 @@ class Edge(BaseModel):
     """Represents a directed edge (dependency) in the execution graph."""
     from_node: str = Field(..., description="Effective_id of the source node.")
     to_node: str = Field(..., description="Effective_id of the target node.")
-    description: Optional[str] = Field(None, description="Reason for the dependency (e.g., 'User ID from createUser is needed by getUserDetails').")
+    description: Optional[str] = Field(None, description="Reason for the dependency.")
 
     def __hash__(self):
         return hash((self.from_node, self.to_node))
@@ -55,19 +72,20 @@ class GraphOutput(BaseModel):
 
     @model_validator(mode='after')
     def check_graph_integrity(self) -> 'GraphOutput':
+        if not self.nodes: # Allow empty graph if it's being built
+            return self
+            
         node_effective_ids = {node.effective_id for node in self.nodes}
-        # Check unique node IDs
         if len(node_effective_ids) != len(self.nodes):
             seen_ids = set()
             duplicates = [node.effective_id for node in self.nodes if node.effective_id in seen_ids or seen_ids.add(node.effective_id)] # type: ignore
             raise ValueError(f"Duplicate node effective_ids found: {list(set(duplicates))}. Use 'display_name' for duplicate operationIds.")
 
-        # Check edge validity
         for edge in self.edges:
-            if edge.from_node not in node_effective_ids:
-                raise ValueError(f"Edge source node '{edge.from_node}' not found in graph nodes.")
-            if edge.to_node not in node_effective_ids:
-                raise ValueError(f"Edge target node '{edge.to_node}' not found in graph nodes.")
+            if edge.from_node not in node_effective_ids and edge.from_node.upper() != "START_NODE":
+                raise ValueError(f"Edge source node '{edge.from_node}' not found in graph nodes (and not START_NODE).")
+            if edge.to_node not in node_effective_ids and edge.to_node.upper() != "END_NODE":
+                raise ValueError(f"Edge target node '{edge.to_node}' not found in graph nodes (and not END_NODE).")
         return self
 
 # --- State Model ---
@@ -95,13 +113,12 @@ class BotState(BaseModel):
     max_refinement_iterations: int = Field(3, description="Maximum refinement iterations.")
     graph_regeneration_reason: Optional[str] = Field(None, description="Feedback for why graph needs regeneration/refinement.")
 
-
-    # Interactive Phase State
-    # Using scratchpad for interactive plan details to keep BotState cleaner
-    # scratchpad fields for interactive plan:
-    #   - 'interactive_action_plan': List[Dict]
-    #   - 'current_interactive_action_idx': int
-    #   - 'current_interactive_results': List[Any]
+    # Workflow Execution State Fields
+    workflow_execution_status: Literal["idle", "running", "paused_for_confirmation", "completed", "failed"] = Field("idle", description="Status of the current workflow execution.")
+    workflow_execution_results: Dict[str, Any] = Field(default_factory=dict, description="Stores results from executed nodes, keyed by node effective_id.")
+    workflow_extracted_data: Dict[str, Any] = Field(default_factory=dict, description="Shared data pool extracted from node responses, used as input for subsequent nodes.")
+    # current_workflow_executor_id: Optional[str] = Field(None, description="Identifier for the active workflow executor instance, if needed for managing multiple.")
+    # The executor instance itself might be stored in scratchpad if needed across turns for a session
 
     # Routing and Control Flow
     intent: Optional[str] = Field(None, description="User's high-level intent from router.")
@@ -116,10 +133,10 @@ class BotState(BaseModel):
     next_step: Optional[str] = Field(None, alias="__next__", exclude=True, description="Internal: next LangGraph node.")
 
     # General working memory
-    scratchpad: Dict[str, Any] = Field(default_factory=dict, description="Persistent memory for intermediate results, logs, etc.")
+    scratchpad: Dict[str, Any] = Field(default_factory=dict, description="Persistent memory for intermediate results, logs, workflow executor instances, etc.")
 
     class Config:
-        extra = 'allow'
+        extra = 'allow' # Allow extra fields for flexibility (like storing executor instance)
         validate_assignment = True
         populate_by_name = True
 
@@ -130,5 +147,6 @@ class BotState(BaseModel):
         if not isinstance(reason_log, list): reason_log = []
         timestamp = datetime.now().isoformat()
         reason_log.append({"timestamp": timestamp, "tool": tool_name, "details": details})
-        self.scratchpad['reasoning_log'] = reason_log[-100:] # Keep last 100 entries
+        self.scratchpad['reasoning_log'] = reason_log[-100:] 
         logger.debug(f"Scratchpad Updated by {tool_name}: {details[:200]}...")
+
