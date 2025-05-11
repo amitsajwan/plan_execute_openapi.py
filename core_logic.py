@@ -290,7 +290,7 @@ class OpenAPICoreLogic:
             state.update_scratchpad_reason(tool_name, "Graph verification successful.")
             logger.info("Graph verification successful.")
             state.graph_regeneration_reason = None 
-            state.scratchpad['refinement_validation_failures'] = 0 # Reset on successful verification
+            state.scratchpad['refinement_validation_failures'] = 0 
             
             try:
                 state.scratchpad['graph_to_send'] = state.execution_graph.model_dump_json(indent=2)
@@ -349,43 +349,40 @@ class OpenAPICoreLogic:
 
             if refined_graph_candidate:
                 logger.info(f"Refinement attempt (iter {iteration}) produced a structurally valid GraphOutput.")
-                state.execution_graph = refined_graph_candidate # Update with the new, validated graph
+                state.execution_graph = refined_graph_candidate 
                 refinement_summary = refined_graph_candidate.refinement_summary or "AI provided no specific summary for this refinement."
                 state.update_scratchpad_reason(tool_name, f"LLM Refinement Summary: {refinement_summary}")
                 
                 state.graph_refinement_iterations = iteration
                 state.response = f"Graph refined (Iteration {iteration}). Summary: {refinement_summary}" 
                 state.graph_regeneration_reason = None 
-                state.scratchpad['refinement_validation_failures'] = 0 # Reset on successful refinement
+                state.scratchpad['refinement_validation_failures'] = 0 
                 state.next_step = "verify_graph" 
             else:
-                # LLM output was invalid JSON, or failed Pydantic validation (e.g., bad edge reference)
                 error_msg = "LLM refinement failed to produce a valid and self-consistent GraphOutput JSON structure."
                 logger.error(error_msg + f" Raw LLM output snippet for refinement: {llm_response_str[:300]}...")
                 state.response = f"Error during graph refinement (iteration {iteration}): AI output was invalid. Will retry or regenerate."
                 state.graph_regeneration_reason = "LLM output for refinement was not a valid GraphOutput object, or had structural issues (e.g., invalid edge references)."
                 
-                # Increment refinement validation failure counter
                 state.scratchpad['refinement_validation_failures'] = state.scratchpad.get('refinement_validation_failures', 0) + 1
                 
                 if iteration < state.max_refinement_iterations:
-                    if state.scratchpad['refinement_validation_failures'] >= 2: # If 2 consecutive refinement validation failures
+                    if state.scratchpad['refinement_validation_failures'] >= 2: 
                         logger.warning(f"Multiple consecutive refinement validation failures (iter {iteration}). Escalating to full graph regeneration.")
                         state.response += " Attempting full regeneration due to persistent refinement issues."
-                        state.next_step = "_generate_execution_graph" # Escalate to full regeneration
-                        state.graph_refinement_iterations = 0 # Reset refinement count for the new graph
+                        state.next_step = "_generate_execution_graph" 
+                        state.graph_refinement_iterations = 0 
                         state.scratchpad['refinement_validation_failures'] = 0
                     else:
-                        state.next_step = "refine_api_graph" # Retry refinement
+                        state.next_step = "refine_api_graph" 
                 else:
                     logger.warning(f"Max refinement iterations reached after LLM output error. Describing last valid graph.")
-                    state.next_step = "describe_graph" # Give up on this refinement path
+                    state.next_step = "describe_graph" 
         
-        except Exception as e: # Catch other errors like LLM API call failures (quota, network)
+        except Exception as e: 
             logger.error(f"Error during graph refinement LLM call or processing (iter {iteration}): {e}", exc_info=False)
             state.response = f"Error refining graph (iter {iteration}): {str(e)[:150]}..."
             state.graph_regeneration_reason = f"Refinement LLM call/processing error (iter {iteration}): {str(e)[:100]}..."
-            # If quota error or other LLM call error, don't retry refinement immediately, go describe current graph.
             state.next_step = "describe_graph"
         return state
 
@@ -400,11 +397,16 @@ class OpenAPICoreLogic:
             desc = state.execution_graph.description
             if not desc or len(desc) < 20:
                 nodes_str = "\n".join([f"- {n.effective_id}: {n.summary or n.operationId}" for n in state.execution_graph.nodes[:3]])
-                prompt = f"Describe API graph for goal '{state.plan_generation_goal or 'general use'}'. Nodes ({len(state.execution_graph.nodes)} total, sample):\n{nodes_str}\nExplain purpose & flow concisely."
+                prompt = f"Describe API graph for goal '{state.plan_generation_goal or 'general use'}'. Nodes ({len(state.execution_graph.nodes)} total, sample):\n{nodes_str}\nExplain purpose & flow concisely. Use Markdown for readability (headings, lists)."
                 try: desc = llm_call_helper(self.worker_llm, prompt)
                 except Exception as e: desc = f"Error generating dynamic desc: {str(e)[:100]}... Stored: {state.execution_graph.description or 'N/A'}"
-            state.response = f"Current API Workflow for '{state.plan_generation_goal or 'general use'}':\n{desc}" 
-            if state.execution_graph.refinement_summary: state.response += f"\nLast Refinement: {state.execution_graph.refinement_summary}"
+            
+            # Ensure final description is user-friendly
+            final_desc = f"### Current API Workflow for: '{state.plan_generation_goal or 'General Use'}'\n\n{desc}"
+            if state.execution_graph.refinement_summary: 
+                final_desc += f"\n\n**Last Refinement Note:** {state.execution_graph.refinement_summary}"
+            state.response = final_desc
+
         state.update_scratchpad_reason(tool_name, f"Described graph. Response set: {state.response[:100]}...")
         state.next_step = "responder"
         return state
@@ -430,16 +432,47 @@ class OpenAPICoreLogic:
         if not state.openapi_schema:
             state.response = "No OpenAPI spec loaded."; state.next_step = "responder"; return state
         
-        ctx = [f"Q: \"{state.user_input}\"", f"API Summary: {state.schema_summary or 'N/A'}",
-               f"APIs ({len(state.identified_apis)}): {', '.join(a['operationId'] for a in state.identified_apis[:5])}...",
-               f"Graph Goal: {state.plan_generation_goal or 'N/A'}",
-               f"Graph Desc: {state.execution_graph.description if state.execution_graph else 'N/A'}"]
-        if state.user_input and any(op_id in state.user_input for op_id in state.payload_descriptions): # type: ignore
-            for op_id, desc in state.payload_descriptions.items():
-                if op_id in state.user_input: ctx.append(f"Payload for '{op_id}': {desc[:100]}..."); break # type: ignore
-        prompt = "\n".join(ctx) + "\nAnswer Q based on API info & graph. Concise. If missing, state that."
-        try: state.response = llm_call_helper(self.worker_llm, prompt) 
-        except Exception as e: state.response = f"Error answering: {str(e)[:100]}..."
+        # Prepare a detailed context string
+        api_list_md = ""
+        if state.identified_apis:
+            api_list_md = "\nIdentified API Operations:\n"
+            for api in state.identified_apis[:10]: # Show up to 10
+                api_list_md += f"- **{api['operationId']}**: {api['method']} {api['path']} - _{api['summary']}_\n"
+            if len(state.identified_apis) > 10:
+                api_list_md += "- ... and more.\n"
+        
+        graph_desc_md = ""
+        if state.execution_graph and state.execution_graph.description:
+            graph_desc_md = f"\nCurrent Workflow Graph ('{state.plan_generation_goal or 'General'}'):\n{state.execution_graph.description}\n"
+            if state.execution_graph.refinement_summary:
+                graph_desc_md += f"Last Refinement: {state.execution_graph.refinement_summary}\n"
+
+        payload_info_md = ""
+        if state.user_input:
+            for op_id, desc_text in state.payload_descriptions.items():
+                if op_id.lower() in state.user_input.lower(): # Simple check if op_id is mentioned
+                    payload_info_md = f"\nPayload/Response Example for '{op_id}':\n{desc_text}\n"
+                    break
+        
+        prompt = f"""
+        You are an expert API assistant. Answer the user's question based on the provided context.
+        Use Markdown for formatting (headings, lists, bolding, italics, code blocks for JSON).
+
+        User Question: "{state.user_input}"
+
+        Context:
+        ### API Specification Summary
+        {state.schema_summary or 'Not available.'}
+        {api_list_md or 'No specific API operations listed in this context.'}
+        {graph_desc_md or 'No execution graph currently described.'}
+        {payload_info_md or 'No specific payload example requested in this query.'}
+
+        Please provide a clear, well-formatted, and helpful answer. If the information is not available in the context, state that.
+        """
+        try: 
+            state.response = llm_call_helper(self.worker_llm, prompt) 
+        except Exception as e: 
+            state.response = f"### Error Answering Query\nSorry, I encountered an error: {str(e)[:100]}..."
         state.update_scratchpad_reason(tool_name, f"Answered query. Response: {state.response[:100]}...")
         state.next_step = "responder"
         return state
@@ -527,7 +560,7 @@ class OpenAPICoreLogic:
     def _internal_synthesize_final_answer(self, state: BotState, instr: str) -> str:
         state.response = "Synthesizing final answer..." 
         results_sum = "\n".join([str(r)[:100]+"..." for r in state.scratchpad.get('current_interactive_results',[])])
-        prompt = f"User Query Understanding: {state.scratchpad.get('user_query_understanding','N/A')}. Synthesis Instr: {instr}. Internal Results:\n{results_sum}\nGraph Desc: {state.execution_graph.description if state.execution_graph else 'N/A'}. Formulate final user answer."
+        prompt = f"User Query Understanding: {state.scratchpad.get('user_query_understanding','N/A')}. Synthesis Instr: {instr}. Internal Results:\n{results_sum}\nGraph Desc: {state.execution_graph.description if state.execution_graph else 'N/A'}. Formulate final user answer using Markdown for readability."
         try: state.response = llm_call_helper(self.worker_llm, prompt) 
         except Exception as e: state.response = f"Error synthesizing: {str(e)[:100]}..."
         return state.response or "Synthesis error."
@@ -553,16 +586,13 @@ class OpenAPICoreLogic:
             elif name == "contextualize_graph_descriptions": action_result_message = self._internal_contextualize_graph(state, params.get("target_node_operation_ids"), params.get("new_context",""))
             elif name == "regenerate_graph_with_new_goal" and params.get("new_goal_string"):
                 state.plan_generation_goal = params["new_goal_string"]; state.graph_refinement_iterations = 0; state.execution_graph = None
-                # Reset attempts for the new graph generation
                 state.scratchpad['graph_gen_attempts'] = 0
                 state.scratchpad['refinement_validation_failures'] = 0
                 self._generate_execution_graph(state, goal=state.plan_generation_goal) 
                 results.append(f"Started new graph for: {state.plan_generation_goal}"); state.scratchpad['current_interactive_results'] = results
-                return state # Main graph flow takes over
+                return state 
             elif name == "refine_existing_graph_further" and state.execution_graph:
                 state.graph_regeneration_reason = params.get("refinement_instructions","")
-                # Reset refinement attempts if user explicitly asks for refinement of current graph
-                # state.graph_refinement_iterations = 0 # Optional: allow more refinement attempts
                 state.scratchpad['refinement_validation_failures'] = 0
                 self.refine_api_graph(state) 
                 results.append(f"Started graph refinement."); state.scratchpad['current_interactive_results'] = results
