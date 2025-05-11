@@ -334,7 +334,7 @@ HTML_TEST_PAGE = """
         button span { margin-right: 5px; }
         pre { 
             background-color: #282c34; 
-            color: #e2e8f0; /* Changed from abb2bf for better contrast on dark */
+            color: #e2e8f0; 
             padding: 1em; 
             border-radius: 6px; 
             overflow-x: auto; 
@@ -373,6 +373,7 @@ HTML_TEST_PAGE = """
     const thinkingIndicator = document.getElementById('thinkingIndicator');
     let ws;
 
+    // Define functions in the global scope or ensure they are accessible
     function showThinking(show) {
         thinkingIndicator.style.display = show ? 'inline-block' : 'none';
         sendButton.disabled = show;
@@ -381,7 +382,11 @@ HTML_TEST_PAGE = """
 
     function escapeHtml(unsafe) {
         if (typeof unsafe !== 'string') {
-            return JSON.stringify(unsafe, null, 2); // Fallback for non-strings
+            try {
+                return JSON.stringify(unsafe, null, 2); // Fallback for non-strings
+            } catch (e) {
+                return String(unsafe); // Ultimate fallback
+            }
         }
         return unsafe
             .replace(/&/g, "&amp;")
@@ -396,35 +401,33 @@ HTML_TEST_PAGE = """
             return '<pre>' + escapeHtml(JSON.stringify(contentStr, null, 2)) + '</pre>';
         }
 
-        // Apply rich formatting only for 'final' or 'agent' (default) message types
         if (type !== 'agent' && type !== 'final') {
-            return escapeHtml(contentStr); // Basic escaping for other types
+            return escapeHtml(contentStr);
         }
         
         let html = '';
         const codeBlockPlaceholders = [];
         
-        // Pre-process to handle fenced code blocks
-        let processedContentStr = contentStr.replace(/```(\w*)\n([\s\S]*?)\n```/g, (match, lang, code) => {
+        // Corrected Regex for Python multi-line strings: escape backslashes for Python
+        let processedContentStr = contentStr.replace(/```(\w*?)\\n([\s\S]*?)\\n```/g, (match, lang, code) => {
             const placeholder = `__CODEBLOCK_${codeBlockPlaceholders.length}__`;
             const langClass = lang ? `language-${escapeHtml(lang)}` : 'language-plaintext';
             codeBlockPlaceholders.push(`<pre><code class="${langClass}">${escapeHtml(code)}</code></pre>`);
             return placeholder;
         });
-        // For code blocks without language identifier
-        processedContentStr = processedContentStr.replace(/```\n([\s\S]*?)\n```/g, (match, code) => {
+        processedContentStr = processedContentStr.replace(/```\\n([\s\S]*?)\\n```/g, (match, code) => {
             const placeholder = `__CODEBLOCK_${codeBlockPlaceholders.length}__`;
             codeBlockPlaceholders.push(`<pre><code>${escapeHtml(code)}</code></pre>`);
             return placeholder;
         });
 
-        const lines = processedContentStr.split('\\n'); // Split by actual escaped newline from Python string
+        const lines = processedContentStr.split('\\n'); // Python's \n becomes \\n in JSON, then \n in JS
         let inList = false;
         let paragraphBuffer = [];
 
         function flushParagraph() {
             if (paragraphBuffer.length > 0) {
-                html += `<p>${paragraphBuffer.join('<br>')}</p>`; // Use <br> for multi-line paragraphs
+                html += `<p>${paragraphBuffer.join('<br>')}</p>`;
                 paragraphBuffer = [];
             }
         }
@@ -454,25 +457,47 @@ HTML_TEST_PAGE = """
                 if (placeholderIndex >= 0 && placeholderIndex < codeBlockPlaceholders.length) {
                     html += codeBlockPlaceholders[placeholderIndex];
                 } else {
-                    html += escapeHtml(line); // Fallback if placeholder is weird
+                    html += escapeHtml(line); 
                 }
             } else { 
                 if (inList && line.trim() !== "" && !line.trim().startsWith("- ") && !line.trim().startsWith("* ")) {
-                    // Line after a list item that isn't another list item, ends the list.
                     html += '</ul>'; inList = false;
                 }
                 
                 if (line.trim() === "") {
                     flushParagraph(); 
                 } else {
-                    paragraphBuffer.push(escapeHtml(line)); // Don't trim here, let <p> handle spacing
+                    paragraphBuffer.push(escapeHtml(line)); 
                 }
             }
         }
         flushParagraph(); 
         if (inList) html += '</ul>'; 
         
-        return html || "<p>" + escapeHtml(contentStr) + "</p>"; // Fallback if all lines were e.g. placeholders
+        return html || "<p>" + escapeHtml(contentStr) + "</p>";
+    }
+
+    function addChatMessage(message, type) {
+        const messageElement = document.createElement('div');
+        messageElement.innerHTML = message; 
+        messageElement.className = 'message ' + type;
+        messagesDiv.appendChild(messageElement);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+    
+    // Define sendMessage in the global scope or ensure it's defined before use
+    window.sendMessage = function() { // Explicitly attach to window or ensure it's global
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            const messageText = messageInput.value;
+            if (messageText.trim() === "") return;
+            addChatMessage("You: " + escapeHtml(messageText), "user");
+            ws.send(messageText);
+            messageInput.value = '';
+            messageInput.style.height = 'auto'; 
+            showThinking(true);
+        } else {
+            addChatMessage("WebSocket is not connected.", "error");
+        }
     }
 
     function connect() {
@@ -500,9 +525,7 @@ HTML_TEST_PAGE = """
             } else if (type === "final" || type === "error" || type === "info" || type === "warning") {
                 showThinking(false);
             }
-            // Intermediate messages might also stop thinking if they are substantial,
-            // but for now, only the above types explicitly stop it.
-
+            
             content = formatMessageContent(content, type);
             addChatMessage(`Agent (${type}): ${content}`, type);
         };
@@ -523,28 +546,6 @@ HTML_TEST_PAGE = """
             setTimeout(connect, 5000);
         };
     }
-
-    function addChatMessage(message, type) {
-        const messageElement = document.createElement('div');
-        messageElement.innerHTML = message; 
-        messageElement.className = 'message ' + type;
-        messagesDiv.appendChild(messageElement);
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    }
-
-    function sendMessage() {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            const messageText = messageInput.value;
-            if (messageText.trim() === "") return;
-            addChatMessage("You: " + escapeHtml(messageText), "user");
-            ws.send(messageText);
-            messageInput.value = '';
-            messageInput.style.height = 'auto'; // Reset height
-            showThinking(true);
-        } else {
-            addChatMessage("WebSocket is not connected.", "error");
-        }
-    }
     
     messageInput.addEventListener('input', function() {
         this.style.height = 'auto';
@@ -554,10 +555,13 @@ HTML_TEST_PAGE = """
     messageInput.addEventListener('keypress', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) { 
             e.preventDefault(); 
-            sendMessage(); 
+            sendMessage(); // Call the globally defined sendMessage
         }
     });
+    
+    // Call connect to establish WebSocket connection
     connect();
+
 </script></body></html>
 """
 
