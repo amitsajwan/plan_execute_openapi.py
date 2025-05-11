@@ -10,8 +10,19 @@
     <div class="header">OpenAPI Multi-view Agent (Gemini LLM)</div>
     <div class="main-container">
         <div class="graph-view-container">
-            <h2>Execution Graph (JSON)</h2>
-            <div id="graphJsonView"><pre>No graph loaded yet.</pre></div>
+            <h2>Execution Graph</h2>
+            <div class="tab-buttons">
+                <button id="jsonTabButton" class="active" onclick="showGraphTab('json')">JSON</button>
+                <button id="dagTabButton" onclick="showGraphTab('dag')">DAG</button>
+            </div>
+            <div id="graphJsonViewContent" class="tab-content active">
+                <pre id="graphJsonViewPre">No graph loaded yet.</pre>
+            </div>
+            <div id="graphDagViewContent" class="tab-content">
+                <div class="mermaid" id="mermaidDagDiagram">
+                    Graph not yet available or cannot be rendered.
+                </div>
+            </div>
         </div>
         <div class="chat-container">
             <div id="messages"></div>
@@ -24,6 +35,7 @@
             </div>
         </div>
     </div>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script src="/static/script.js"></script>
 </body>
 </html>
