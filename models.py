@@ -29,7 +29,6 @@ class Node(BaseModel):
     summary: Optional[str] = Field(None, description="Short summary of the API operation.")
     description: Optional[str] = Field(None, description="Detailed description of this step's purpose in the workflow.")
     
-    # Fields required for execution
     method: Optional[str] = Field(None, description="HTTP method for the API call (e.g., GET, POST). Populated during graph generation or API identification.")
     path: Optional[str] = Field(None, description="API path template (e.g., /users/{userId}). Populated during graph generation or API identification.")
     payload_description: Optional[str] = Field(None, description="Natural language description of an example request payload and expected response structure. Can also be a JSON string template.")
@@ -38,11 +37,6 @@ class Node(BaseModel):
     output_mappings: List[OutputMapping] = Field(default_factory=list, description="How to extract data from this node's response into a shared pool.")
     
     requires_confirmation: bool = Field(False, description="If true, workflow should interrupt for user confirmation before executing this node (e.g., for POST, PUT, DELETE).")
-
-    # Optional: Store structured parameter/request body info if LLM generates it
-    # parameters_schema: Optional[List[Dict[str, Any]]] = Field(None, description="Schema of parameters for this operation, if detailed by LLM.")
-    # request_body_schema: Optional[Dict[str, Any]]] = Field(None, description="Schema of the request body for this operation, if detailed by LLM.")
-
 
     @property
     def effective_id(self) -> str:
@@ -72,7 +66,7 @@ class GraphOutput(BaseModel):
 
     @model_validator(mode='after')
     def check_graph_integrity(self) -> 'GraphOutput':
-        if not self.nodes: # Allow empty graph if it's being built
+        if not self.nodes: 
             return self
             
         node_effective_ids = {node.effective_id for node in self.nodes}
@@ -94,7 +88,6 @@ class BotState(BaseModel):
     session_id: str = Field(..., description="Unique identifier for the current session.")
     user_input: Optional[str] = Field(None, description="The latest input from the user.")
 
-    # OpenAPI Specification related fields
     openapi_spec_string: Optional[str] = Field(None, description="Temporary storage for raw OpenAPI spec text from user.")
     openapi_spec_text: Optional[str] = Field(None, description="Successfully parsed OpenAPI spec text.")
     openapi_schema: Optional[Dict[str, Any]] = Field(None, description="Parsed OpenAPI schema as a dictionary.")
@@ -102,42 +95,36 @@ class BotState(BaseModel):
     schema_summary: Optional[str] = Field(None, description="LLM-generated summary of the OpenAPI schema.")
     input_is_spec: bool = Field(False, description="Flag indicating if last input was identified as an OpenAPI spec.")
 
-    # API Identification and Payload Descriptions
     identified_apis: List[Dict[str, Any]] = Field(default_factory=list, description="List of APIs identified from spec (operationId, method, path, summary, params, requestBody).")
     payload_descriptions: Dict[str, str] = Field(default_factory=dict, description="Maps operationId to LLM-generated example payload and response descriptions.")
 
-    # Execution Graph / Plan
-    execution_graph: Optional[GraphOutput] = Field(None, description="The generated API execution graph/plan.")
+    # --- Temporarily commented out for debugging SchemaCoercionMapper error ---
+    # execution_graph: Optional[GraphOutput] = Field(None, description="The generated API execution graph/plan.")
+    # -------------------------------------------------------------------------
     plan_generation_goal: Optional[str] = Field(None, description="User's goal for the current execution graph.")
     graph_refinement_iterations: int = Field(0, description="Counter for graph refinement attempts.")
     max_refinement_iterations: int = Field(3, description="Maximum refinement iterations.")
     graph_regeneration_reason: Optional[str] = Field(None, description="Feedback for why graph needs regeneration/refinement.")
 
-    # Workflow Execution State Fields
     workflow_execution_status: Literal[
         "idle",
-        "pending_start", # Added this status
+        "pending_start",
         "running",
         "paused_for_confirmation",
         "completed",
         "failed"
     ] = Field("idle", description="Status of the current workflow execution.")
-    workflow_execution_results: Dict[str, Any] = Field(default_factory=dict, description="Stores results from executed nodes, keyed by node effective_id.") # Consider if this should be a list of logs instead
+    workflow_execution_results: Dict[str, Any] = Field(default_factory=dict, description="Stores results from executed nodes, keyed by node effective_id.")
     workflow_extracted_data: Dict[str, Any] = Field(default_factory=dict, description="Shared data pool extracted from node responses, used as input for subsequent nodes.")
     
-    # Routing and Control Flow
     intent: Optional[str] = Field(None, description="User's high-level intent from router.")
     loop_counter: int = Field(0, description="Counter for detecting routing loops.")
     extracted_params: Optional[Dict[str, Any]] = Field(None, description="Parameters extracted by router for specific actions.")
 
-    # Responder Fields
     final_response: str = Field("", description="Final, user-facing response from responder.")
     response: Optional[str] = Field(None, description="Intermediate response message from nodes (cleared by responder).")
 
-    # LangGraph internal key for routing
     next_step: Optional[str] = Field(None, alias="__next__", exclude=True, description="Internal: next LangGraph node.")
-
-    # General working memory
     scratchpad: Dict[str, Any] = Field(default_factory=dict, description="Persistent memory for intermediate results, logs, workflow executor instances, etc.")
 
     class Config:
@@ -154,4 +141,3 @@ class BotState(BaseModel):
         reason_log.append({"timestamp": timestamp, "tool": tool_name, "details": details})
         self.scratchpad['reasoning_log'] = reason_log[-100:] 
         logger.debug(f"Scratchpad Updated by {tool_name}: {details[:200]}...")
-
