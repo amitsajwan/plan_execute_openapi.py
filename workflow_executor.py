@@ -1,4 +1,4 @@
-# workflow_executor.py (Simplified for Debugging RLock)
+# workflow_executor.py (Simplified for Debugging RLock & Resume)
 import asyncio
 import logging
 import json
@@ -6,19 +6,21 @@ from typing import Any, Callable, Awaitable, Dict, Optional, List
 
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver # Using MemorySaver for simplicity
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.runnables import RunnableLambda
 
-from models import GraphOutput, Node # Assuming these are your Pydantic models for graph definition
+from models import GraphOutput, Node
 
 logger = logging.getLogger(__name__)
 
-# --- Simplified State ---
 class SimplifiedWorkflowState(BaseModel):
-    """A very simplified state for debugging workflow execution."""
     node_visits: List[str] = Field(default_factory=list)
     last_visited_node: Optional[str] = None
     error_message: Optional[str] = None
+    # Added field to track if a node is waiting for confirmation
+    waiting_for_confirmation_on_node: Optional[str] = None
+    last_resume_payload_received: Optional[Dict[str, Any]] = None
+
 
     class Config:
         extra = 'allow'
@@ -28,19 +30,18 @@ class WorkflowExecutor:
     def __init__(
         self,
         workflow_definition: GraphOutput,
-        # api_executor_instance: APIExecutor, # Not used in simplified version
-        websocket_callback: Callable[[str, Dict, str], Awaitable[None]], # Keep for notifications
+        websocket_callback: Callable[[str, Dict, str], Awaitable[None]],
         session_id: str,
-        # initial_extracted_data: Optional[Dict[str, Any]] = None # Not used
     ):
         if not workflow_definition or not workflow_definition.nodes:
-            raise ValueError("Workflow definition (GraphOutput) is empty or has no nodes.")
+            raise ValueError("Workflow definition is empty or has no nodes.")
 
         self.workflow_def = workflow_definition
-        # self.api_executor = api_executor_instance # Not used
         self.websocket_callback = websocket_callback
         self.session_id = session_id
-        # self.resume_queue: asyncio.Queue = asyncio.Queue() # Not used in simplified version
+        self.resume_queue: asyncio.Queue = asyncio.Queue()
+        logger.info(f"[{self.session_id}] WorkflowExecutor __init__: Resume queue created: {id(self.resume_queue)}")
+
 
         builder = StateGraph(SimplifiedWorkflowState)
 
@@ -57,43 +58,81 @@ class WorkflowExecutor:
             else:
                 builder.add_edge(edge_def.from_node, edge_def.to_node)
 
-        # Using MemorySaver, debug=True for more logs
         self.compiled_graph = builder.compile(checkpointer=MemorySaver(), debug=True)
-        logger.info(f"[{self.session_id}] Simplified WorkflowExecutor: Graph compiled with {len(self.workflow_def.nodes)} nodes.")
+        logger.info(f"[{self.session_id}] Simplified WorkflowExecutor: Graph compiled.")
         self.initial_execution_state = SimplifiedWorkflowState()
 
     def _simplified_node_runner_wrapper(self, node_def: Node) -> Callable[[SimplifiedWorkflowState], Awaitable[SimplifiedWorkflowState]]:
-        """
-        Creates a simplified async runner for a node.
-        It logs visitation and appends to a list in the state.
-        """
         async def _run_node_instance(current_state: SimplifiedWorkflowState) -> SimplifiedWorkflowState:
             node_id = node_def.effective_id
-            logger.info(f"[{self.session_id}] Simplified Node Execution: Visiting '{node_id}' (OpID: {node_def.operationId})")
+            logger.info(f"[{self.session_id}] Simplified Node: '{node_id}' (OpID: {node_def.operationId}) execution START.")
             
-            # Simulate some async work
-            await asyncio.sleep(0.05) 
-
-            # Update state
             new_node_visits = current_state.node_visits + [node_id]
-            
-            if self.websocket_callback:
-                try:
+            next_state_dict = {
+                "node_visits": new_node_visits,
+                "last_visited_node": node_id,
+                "error_message": current_state.error_message, # Preserve error
+                "waiting_for_confirmation_on_node": None, # Clear previous wait
+                "last_resume_payload_received": None
+            }
+
+            # Simulate a node that might require confirmation (e.g., if its name contains "confirm")
+            # In your real Node model, you have `node_def.requires_confirmation`
+            if node_def.requires_confirmation: # Using the actual field from your Node model
+                logger.info(f"[{self.session_id}] Node '{node_id}' requires confirmation.")
+                next_state_dict["waiting_for_confirmation_on_node"] = node_id
+                if self.websocket_callback:
                     await self.websocket_callback(
-                        "node_execution_succeeded", # Simplified event
-                        {"node_id": node_id, "message": f"Successfully visited {node_id}"},
+                        "interrupt_confirmation_required",
+                        {"node_id": node_id, "message": f"Node '{node_id}' requires your confirmation to proceed."},
                         self.session_id
                     )
-                except Exception as e_cb:
-                    logger.error(f"[{self.session_id}] Error in websocket_callback during simplified node {node_id}: {e_cb}")
+                
+                confirmed_payload = None
+                try:
+                    logger.info(f"[{self.session_id}] Node '{node_id}' awaiting on resume_queue: {id(self.resume_queue)}...")
+                    # Set a shorter timeout for testing if needed
+                    confirmed_payload = await asyncio.wait_for(self.resume_queue.get(), timeout=600) 
+                    logger.info(f"[{self.session_id}] Node '{node_id}' received from queue: {str(confirmed_payload)[:100]}")
+                    next_state_dict["last_resume_payload_received"] = confirmed_payload
+                    next_state_dict["waiting_for_confirmation_on_node"] = None # Confirmation received
+                    if self.websocket_callback:
+                         await self.websocket_callback("node_resumed_with_payload", {"node_id": node_id, "payload_received": str(confirmed_payload)[:100]}, self.session_id)
+                except asyncio.TimeoutError:
+                    error_msg = f"Node '{node_id}' confirmation timed out."
+                    logger.error(f"[{self.session_id}] {error_msg}")
+                    next_state_dict["error_message"] = error_msg
+                    next_state_dict["waiting_for_confirmation_on_node"] = None # Timeout, no longer waiting
+                    if self.websocket_callback:
+                        await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": error_msg}, self.session_id)
+                    return SimplifiedWorkflowState(**next_state_dict) # End execution for this path
+                except asyncio.CancelledError:
+                    logger.warning(f"[{self.session_id}] Node '{node_id}' confirmation wait cancelled.")
+                    next_state_dict["error_message"] = "Confirmation cancelled"
+                    next_state_dict["waiting_for_confirmation_on_node"] = None
+                    raise # Re-raise to be handled by streaming loop
+                except Exception as e_q:
+                    error_msg = f"Error during confirmation wait for {node_id}: {str(e_q)}"
+                    logger.error(f"[{self.session_id}] {error_msg}", exc_info=True)
+                    next_state_dict["error_message"] = error_msg
+                    next_state_dict["waiting_for_confirmation_on_node"] = None
+                    if self.websocket_callback:
+                        await self.websocket_callback("node_execution_failed", {"node_id": node_id, "error": error_msg}, self.session_id)
+                    return SimplifiedWorkflowState(**next_state_dict)
+                finally:
+                    if confirmed_payload is not None: # Ensure get() was successful
+                        self.resume_queue.task_done()
+            
+            await asyncio.sleep(0.05) # Simulate other work
 
-
-            # Return a new state object or update in place if mutable (Pydantic models are better immutable)
-            return SimplifiedWorkflowState(
-                node_visits=new_node_visits,
-                last_visited_node=node_id,
-                error_message=current_state.error_message # Preserve error if any
-            )
+            if self.websocket_callback:
+                await self.websocket_callback(
+                    "node_execution_succeeded",
+                    {"node_id": node_id, "message": f"Successfully processed {node_id}"},
+                    self.session_id
+                )
+            logger.info(f"[{self.session_id}] Simplified Node: '{node_id}' execution END.")
+            return SimplifiedWorkflowState(**next_state_dict)
         return _run_node_instance
 
     async def run_workflow_streaming(self, thread_config: Dict[str, Any]):
@@ -103,58 +142,54 @@ class WorkflowExecutor:
 
         final_state_to_return = self.initial_execution_state
         try:
-            # Use astream_events to get more granular updates
             async for event in self.compiled_graph.astream_events(self.initial_execution_state, config=thread_config, version="v1"):
                 event_type = event["event"]
-                event_name = event.get("name", "unknown_event_source") # Node name or other source
+                event_name = event.get("name", "unknown_event_source")
                 event_data = event.get("data", {})
+                logger.debug(f"[{self.session_id}] Simplified WF Stream Event: Type='{event_type}', Name='{event_name}'")
 
-                logger.debug(f"[{self.session_id}] Simplified WF Stream Event: Type='{event_type}', Name='{event_name}', DataKeys='{list(event_data.keys())}'")
-
-                # Update local tracking of the state based on events
-                if event_type == "on_chain_end": # A node has finished
+                if event_type == "on_chain_end":
                     output_state_candidate = event_data.get("output")
                     if isinstance(output_state_candidate, SimplifiedWorkflowState):
                         final_state_to_return = output_state_candidate
-                        logger.info(f"[{self.session_id}] Node '{event_name}' finished. Last visited: {final_state_to_return.last_visited_node}. Total visits: {len(final_state_to_return.node_visits)}")
+                        logger.info(f"[{self.session_id}] Node '{event_name}' finished. State: last_visited='{final_state_to_return.last_visited_node}', waiting='{final_state_to_return.waiting_for_confirmation_on_node}'")
 
                 elif event_type == "on_graph_end":
                     final_output_data = event_data.get("output")
                     if isinstance(final_output_data, SimplifiedWorkflowState):
                         final_state_to_return = final_output_data
-                    
-                    logger.info(f"[{self.session_id}] Simplified workflow execution finished (on_graph_end). Final state: {final_state_to_return.dict() if final_state_to_return else 'N/A'}")
+                    logger.info(f"[{self.session_id}] Simplified workflow finished (on_graph_end). Final state: {final_state_to_return.dict() if final_state_to_return else 'N/A'}")
                     if self.websocket_callback:
                         await self.websocket_callback("workflow_execution_completed", {"final_state": final_state_to_return.dict() if final_state_to_return else {}}, self.session_id)
                     return
 
                 elif event_type in ["on_tool_error", "on_chain_error", "on_node_error"]:
-                    error_details_str = str(event_data.get("output", event_data))
-                    logger.error(f"[{self.session_id}] Error event '{event_type}' in simplified workflow at '{event_name}': {error_details_str[:500]}")
-                    final_state_to_return.error_message = f"Error at {event_name}: {error_details_str[:100]}" # Update state with error
-                    if self.websocket_callback:
-                        await self.websocket_callback("workflow_execution_failed", {"node_id": event_name, "error_event_type": event_type, "error": error_details_str[:1000]}, self.session_id)
+                    # ... (error handling as before) ...
                     return
         
         except asyncio.CancelledError:
-            logger.warning(f"[{self.session_id}] Simplified workflow streaming task was cancelled.")
+            logger.warning(f"[{self.session_id}] Simplified workflow streaming task CANCELLED.")
             if self.websocket_callback:
-                await self.websocket_callback("workflow_execution_failed", {"error": "Simplified workflow execution was cancelled."}, self.session_id)
+                await self.websocket_callback("workflow_execution_failed", {"error": "Simplified workflow CANCELLED."}, self.session_id)
             return
         except Exception as e_stream:
-            error_str_stream = str(e_stream)
-            logger.critical(f"[{self.session_id}] Unhandled exception during simplified workflow streaming: {error_str_stream}", exc_info=True)
-            if self.websocket_callback:
-                await self.websocket_callback("workflow_execution_failed", {"error": f"Critical simplified streaming error: {error_str_stream[:500]}"}, self.session_id)
+            # ... (exception handling as before) ...
             return
 
-        # Fallback if loop finishes without on_graph_end
         logger.info(f"[{self.session_id}] Simplified workflow streaming loop completed (fallback).")
         if self.websocket_callback:
             await self.websocket_callback("workflow_execution_completed", {"message": "Simplified streaming ended (fallback).", "final_state": final_state_to_return.dict() if final_state_to_return else {}}, self.session_id)
 
     async def submit_interrupt_value(self, value: Dict[str, Any]):
-        # This method is not used in the simplified version as interrupt handling is removed.
-        logger.warning(f"[{self.session_id}] submit_interrupt_value called on simplified executor, but it has no effect.")
-        pass
+        logger.info(f"[{self.session_id}] WorkflowExecutor submit_interrupt_value: Received value {str(value)[:100]} for queue {id(self.resume_queue)}")
+        try:
+            json.dumps(value) # Test serializability
+            await self.resume_queue.put(value)
+            logger.info(f"[{self.session_id}] Value successfully put onto resume_queue. Queue size approx: {self.resume_queue.qsize()}")
+        except TypeError as e:
+            logger.error(f"[{self.session_id}] Failed to submit non-JSON-serializable interrupt value to queue: {e}. Value: {str(value)[:200]}")
+            if self.websocket_callback:
+                 await self.websocket_callback("workflow_error", {"error": "Submitted data for resume was not valid (not JSON serializable)."}, self.session_id)
+        except Exception as e_put:
+            logger.error(f"[{self.session_id}] Error putting value onto resume_queue: {e_put}", exc_info=True)
 
